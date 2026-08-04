@@ -1,0 +1,602 @@
+[
+  {
+    "path": "dataset/more/more_01.mp4",
+    "label": 0,
+    "word": "more",
+    "seq_len": 39
+  },
+  {
+    "path": "dataset/more/more_02.mp4",
+    "label": 0,
+    "word": "more",
+    "seq_len": 18
+  },
+  {
+    "path": "dataset/more/more_03.mp4",
+    "label": 0,
+    "word": "more",
+    "seq_len": 20
+  },
+  {
+    "path": "dataset/more/more_04.mp4",
+    "label": 0,
+    "word": "more",
+    "seq_len": 21
+  },
+  {
+    "path": "dataset/more/more_05.mp4",
+    "label": 0,
+    "word": "more",
+    "seq_len": 23
+  },
+  {
+    "path": "dataset/more/more_06.mp4",
+    "label": 0,
+    "word": "more",
+    "seq_len": 33
+  },
+  {
+    "path": "dataset/more/more_07.mp4",
+    "label": 0,
+    "word": "more",
+    "seq_len": 30
+  },
+  {
+    "path": "dataset/more/more_08.mp4",
+    "label": 0,
+    "word": "more",
+    "seq_len": 28
+  },
+  {
+    "path": "dataset/more/more_09.mp4",
+    "label": 0,
+    "word": "more",
+    "seq_len": 32
+  },
+  {
+    "path": "dataset/more/more_10.mp4",
+    "label": 0,
+    "word": "more",
+    "seq_len": 35
+  },
+  {
+    "path": "dataset/less/less_01.mp4",
+    "label": 1,
+    "word": "less",
+    "seq_len": 29
+  },
+  {
+    "path": "dataset/less/less_02.mp4",
+    "label": 1,
+    "word": "less",
+    "seq_len": 40
+  },
+  {
+    "path": "dataset/less/less_03.mp4",
+    "label": 1,
+    "word": "less",
+    "seq_len": 36
+  },
+  {
+    "path": "dataset/less/less_04.mp4",
+    "label": 1,
+    "word": "less",
+    "seq_len": 44
+  },
+  {
+    "path": "dataset/less/less_05.mp4",
+    "label": 1,
+    "word": "less",
+    "seq_len": 41
+  },
+  {
+    "path": "dataset/less/less_06.mp4",
+    "label": 1,
+    "word": "less",
+    "seq_len": 49
+  },
+  {
+    "path": "dataset/less/less_07.mp4",
+    "label": 1,
+    "word": "less",
+    "seq_len": 40
+  },
+  {
+    "path": "dataset/less/less_08.mp4",
+    "label": 1,
+    "word": "less",
+    "seq_len": 38
+  },
+  {
+    "path": "dataset/less/less_09.mp4",
+    "label": 1,
+    "word": "less",
+    "seq_len": 37
+  },
+  {
+    "path": "dataset/less/less_10.mp4",
+    "label": 1,
+    "word": "less",
+    "seq_len": 45
+  },
+  {
+    "path": "dataset/double/double_01.mp4",
+    "label": 2,
+    "word": "double",
+    "seq_len": 17
+  },
+  {
+    "path": "dataset/double/double_02.mp4",
+    "label": 2,
+    "word": "double",
+    "seq_len": 22
+  },
+  {
+    "path": "dataset/double/double_03.mp4",
+    "label": 2,
+    "word": "double",
+    "seq_len": 26
+  },
+  {
+    "path": "dataset/double/double_04.mp4",
+    "label": 2,
+    "word": "double",
+    "seq_len": 25
+  },
+  {
+    "path": "dataset/double/double_05.mp4",
+    "label": 2,
+    "word": "double",
+    "seq_len": 21
+  },
+  {
+    "path": "dataset/double/double_06.mp4",
+    "label": 2,
+    "word": "double",
+    "seq_len": 36
+  },
+  {
+    "path": "dataset/double/double_07.mp4",
+    "label": 2,
+    "word": "double",
+    "seq_len": 19
+  },
+  {
+    "path": "dataset/double/double_08.mp4",
+    "label": 2,
+    "word": "double",
+    "seq_len": 23
+  },
+  {
+    "path": "dataset/double/double_09.mp4",
+    "label": 2,
+    "word": "double",
+    "seq_len": 18
+  },
+  {
+    "path": "dataset/double/double_10.mp4",
+    "label": 2,
+    "word": "double",
+    "seq_len": 37
+  },
+  {
+    "path": "dataset/cheese/cheese_01.mp4",
+    "label": 3,
+    "word": "cheese",
+    "seq_len": 32
+  },
+  {
+    "path": "dataset/cheese/cheese_02.mp4",
+    "label": 3,
+    "word": "cheese",
+    "seq_len": 36
+  },
+  {
+    "path": "dataset/cheese/cheese_03.mp4",
+    "label": 3,
+    "word": "cheese",
+    "seq_len": 29
+  },
+  {
+    "path": "dataset/cheese/cheese_04.mp4",
+    "label": 3,
+    "word": "cheese",
+    "seq_len": 25
+  },
+  {
+    "path": "dataset/cheese/cheese_05.mp4",
+    "label": 3,
+    "word": "cheese",
+    "seq_len": 23
+  },
+  {
+    "path": "dataset/cheese/cheese_06.mp4",
+    "label": 3,
+    "word": "cheese",
+    "seq_len": 37
+  },
+  {
+    "path": "dataset/cheese/cheese_07.mp4",
+    "label": 3,
+    "word": "cheese",
+    "seq_len": 22
+  },
+  {
+    "path": "dataset/cheese/cheese_08.mp4",
+    "label": 3,
+    "word": "cheese",
+    "seq_len": 22
+  },
+  {
+    "path": "dataset/cheese/cheese_09.mp4",
+    "label": 3,
+    "word": "cheese",
+    "seq_len": 35
+  },
+  {
+    "path": "dataset/cheese/cheese_10.mp4",
+    "label": 3,
+    "word": "cheese",
+    "seq_len": 20
+  },
+  {
+    "path": "dataset/butter/butter_01.mp4",
+    "label": 4,
+    "word": "butter",
+    "seq_len": 33
+  },
+  {
+    "path": "dataset/butter/butter_02.mp4",
+    "label": 4,
+    "word": "butter",
+    "seq_len": 39
+  },
+  {
+    "path": "dataset/butter/butter_03.mp4",
+    "label": 4,
+    "word": "butter",
+    "seq_len": 38
+  },
+  {
+    "path": "dataset/butter/butter_04.mp4",
+    "label": 4,
+    "word": "butter",
+    "seq_len": 35
+  },
+  {
+    "path": "dataset/butter/butter_05.mp4",
+    "label": 4,
+    "word": "butter",
+    "seq_len": 41
+  },
+  {
+    "path": "dataset/butter/butter_06.mp4",
+    "label": 4,
+    "word": "butter",
+    "seq_len": 42
+  },
+  {
+    "path": "dataset/butter/butter_07.mp4",
+    "label": 4,
+    "word": "butter",
+    "seq_len": 37
+  },
+  {
+    "path": "dataset/butter/butter_08.mp4",
+    "label": 4,
+    "word": "butter",
+    "seq_len": 39
+  },
+  {
+    "path": "dataset/butter/butter_09.mp4",
+    "label": 4,
+    "word": "butter",
+    "seq_len": 42
+  },
+  {
+    "path": "dataset/butter/butter_10.mp4",
+    "label": 4,
+    "word": "butter",
+    "seq_len": 41
+  },
+  {
+    "path": "dataset/sugar/sugar_01.mp4",
+    "label": 5,
+    "word": "sugar",
+    "seq_len": 51
+  },
+  {
+    "path": "dataset/sugar/sugar_02.mp4",
+    "label": 5,
+    "word": "sugar",
+    "seq_len": 50
+  },
+  {
+    "path": "dataset/sugar/sugar_03.mp4",
+    "label": 5,
+    "word": "sugar",
+    "seq_len": 51
+  },
+  {
+    "path": "dataset/sugar/sugar_04.mp4",
+    "label": 5,
+    "word": "sugar",
+    "seq_len": 51
+  },
+  {
+    "path": "dataset/sugar/sugar_05.mp4",
+    "label": 5,
+    "word": "sugar",
+    "seq_len": 51
+  },
+  {
+    "path": "dataset/sugar/sugar_06.mp4",
+    "label": 5,
+    "word": "sugar",
+    "seq_len": 51
+  },
+  {
+    "path": "dataset/sugar/sugar_07.mp4",
+    "label": 5,
+    "word": "sugar",
+    "seq_len": 51
+  },
+  {
+    "path": "dataset/sugar/sugar_08.mp4",
+    "label": 5,
+    "word": "sugar",
+    "seq_len": 51
+  },
+  {
+    "path": "dataset/sugar/sugar_09.mp4",
+    "label": 5,
+    "word": "sugar",
+    "seq_len": 51
+  },
+  {
+    "path": "dataset/sugar/sugar_10.mp4",
+    "label": 5,
+    "word": "sugar",
+    "seq_len": 51
+  },
+  {
+    "path": "dataset/without/without_01.mp4",
+    "label": 6,
+    "word": "without",
+    "seq_len": 27
+  },
+  {
+    "path": "dataset/without/without_02.mp4",
+    "label": 6,
+    "word": "without",
+    "seq_len": 30
+  },
+  {
+    "path": "dataset/without/without_03.mp4",
+    "label": 6,
+    "word": "without",
+    "seq_len": 28
+  },
+  {
+    "path": "dataset/without/without_04.mp4",
+    "label": 6,
+    "word": "without",
+    "seq_len": 29
+  },
+  {
+    "path": "dataset/without/without_05.mp4",
+    "label": 6,
+    "word": "without",
+    "seq_len": 28
+  },
+  {
+    "path": "dataset/without/without_06.mp4",
+    "label": 6,
+    "word": "without",
+    "seq_len": 29
+  },
+  {
+    "path": "dataset/without/without_07.mp4",
+    "label": 6,
+    "word": "without",
+    "seq_len": 34
+  },
+  {
+    "path": "dataset/without/without_08.mp4",
+    "label": 6,
+    "word": "without",
+    "seq_len": 40
+  },
+  {
+    "path": "dataset/without/without_09.mp4",
+    "label": 6,
+    "word": "without",
+    "seq_len": 29
+  },
+  {
+    "path": "dataset/without/without_10.mp4",
+    "label": 6,
+    "word": "without",
+    "seq_len": 28
+  },
+  {
+    "path": "dataset/add/add_01.mp4",
+    "label": 7,
+    "word": "add",
+    "seq_len": 37
+  },
+  {
+    "path": "dataset/add/add_02.mp4",
+    "label": 7,
+    "word": "add",
+    "seq_len": 36
+  },
+  {
+    "path": "dataset/add/add_03.mp4",
+    "label": 7,
+    "word": "add",
+    "seq_len": 29
+  },
+  {
+    "path": "dataset/add/add_04.mp4",
+    "label": 7,
+    "word": "add",
+    "seq_len": 40
+  },
+  {
+    "path": "dataset/add/add_05.mp4",
+    "label": 7,
+    "word": "add",
+    "seq_len": 35
+  },
+  {
+    "path": "dataset/add/add_06.mp4",
+    "label": 7,
+    "word": "add",
+    "seq_len": 47
+  },
+  {
+    "path": "dataset/add/add_07.mp4",
+    "label": 7,
+    "word": "add",
+    "seq_len": 26
+  },
+  {
+    "path": "dataset/add/add_08.mp4",
+    "label": 7,
+    "word": "add",
+    "seq_len": 40
+  },
+  {
+    "path": "dataset/add/add_09.mp4",
+    "label": 7,
+    "word": "add",
+    "seq_len": 50
+  },
+  {
+    "path": "dataset/add/add_10.mp4",
+    "label": 7,
+    "word": "add",
+    "seq_len": 49
+  },
+  {
+    "path": "dataset/no/no_01.mp4",
+    "label": 8,
+    "word": "no",
+    "seq_len": 49
+  },
+  {
+    "path": "dataset/no/no_02.mp4",
+    "label": 8,
+    "word": "no",
+    "seq_len": 51
+  },
+  {
+    "path": "dataset/no/no_03.mp4",
+    "label": 8,
+    "word": "no",
+    "seq_len": 50
+  },
+  {
+    "path": "dataset/no/no_04.mp4",
+    "label": 8,
+    "word": "no",
+    "seq_len": 51
+  },
+  {
+    "path": "dataset/no/no_05.mp4",
+    "label": 8,
+    "word": "no",
+    "seq_len": 51
+  },
+  {
+    "path": "dataset/no/no_06.mp4",
+    "label": 8,
+    "word": "no",
+    "seq_len": 51
+  },
+  {
+    "path": "dataset/no/no_07.mp4",
+    "label": 8,
+    "word": "no",
+    "seq_len": 50
+  },
+  {
+    "path": "dataset/no/no_08.mp4",
+    "label": 8,
+    "word": "no",
+    "seq_len": 51
+  },
+  {
+    "path": "dataset/no/no_09.mp4",
+    "label": 8,
+    "word": "no",
+    "seq_len": 51
+  },
+  {
+    "path": "dataset/no/no_10.mp4",
+    "label": 8,
+    "word": "no",
+    "seq_len": 51
+  },
+  {
+    "path": "dataset/salt/salt_01.mp4",
+    "label": 9,
+    "word": "salt",
+    "seq_len": 38
+  },
+  {
+    "path": "dataset/salt/salt_02.mp4",
+    "label": 9,
+    "word": "salt",
+    "seq_len": 41
+  },
+  {
+    "path": "dataset/salt/salt_03.mp4",
+    "label": 9,
+    "word": "salt",
+    "seq_len": 42
+  },
+  {
+    "path": "dataset/salt/salt_04.mp4",
+    "label": 9,
+    "word": "salt",
+    "seq_len": 43
+  },
+  {
+    "path": "dataset/salt/salt_05.mp4",
+    "label": 9,
+    "word": "salt",
+    "seq_len": 44
+  },
+  {
+    "path": "dataset/salt/salt_06.mp4",
+    "label": 9,
+    "word": "salt",
+    "seq_len": 45
+  },
+  {
+    "path": "dataset/salt/salt_07.mp4",
+    "label": 9,
+    "word": "salt",
+    "seq_len": 44
+  },
+  {
+    "path": "dataset/salt/salt_08.mp4",
+    "label": 9,
+    "word": "salt",
+    "seq_len": 44
+  },
+  {
+    "path": "dataset/salt/salt_09.mp4",
+    "label": 9,
+    "word": "salt",
+    "seq_len": 43
+  },
+  {
+    "path": "dataset/salt/salt_10.mp4",
+    "label": 9,
+    "word": "salt",
+    "seq_len": 41
+  }
+]
