@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.DS_Store
+capture_dataset.py
+dataset/
+training/*.py
+training/README.md
+training/runs/custom_10_words/models/
+training/runs/custom_10_words/*.json
+!training/runs/custom_10_words/processed/metadata.json
