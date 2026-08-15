@@ -9,3 +9,4 @@ training/README.md
 training/runs/custom_10_words/models/
 training/runs/custom_10_words/*.json
 !training/runs/custom_10_words/processed/metadata.json
+.env

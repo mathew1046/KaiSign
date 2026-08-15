@@ -16,7 +16,158 @@ def test_canonical_total_ignores_client_price():
 
 def test_rejects_non_server_preference():
     with pytest.raises(ValueError):
-        validate_and_total([{"id":"coffee","quantity":1,"preferences":["please add secret"]}])
+        validate_and_total([{"id":"coffee","quantity":1,"preferences":[""]}])
+
+def test_accepts_sanitized_free_form_note():
+    out = validate_and_total([{"id":"coffee","quantity":1,"preferences":["  oat milk <b>please</b>  "]}])
+    assert out["items"][0]["preferences"] == ["oat milk <b>please</b>"]
+
+def test_voice_action_schema_and_normalization():
+    from uuid import uuid4
+    from app.voice import VoiceMode, normalize_tool_action
+    sid = uuid4()
+    env = normalize_tool_action("add_item", {"item_id":"burger", "quantity":2}, mode=VoiceMode.blind, session_id=sid)
+    assert env.schema_version == "voice-action.v1" and env.payload == {"item_id":"burger", "quantity":2}
+    assert env.state.items == [{"id":"burger", "quantity":2, "preferences":[]}]
+
+def test_voice_mode_restrictions_and_context_note():
+    from uuid import uuid4
+    from app.voice import LiveContext, VoiceMode, normalize_tool_action
+    sid = uuid4(); ctx = LiveContext(active_item_id="coffee")
+    env = normalize_tool_action("add_note", {"note":"less ice<script>"}, mode=VoiceMode.normal, session_id=sid, context=ctx)
+    assert env.payload["item_id"] == "coffee" and "<script>" in env.payload["note"]
+    with pytest.raises(ValueError):
+        normalize_tool_action("add_item", {"item_id":"burger"}, mode=VoiceMode.normal, session_id=sid)
+
+def test_voice_tool_argument_validation():
+    from uuid import uuid4
+    from app.voice import VoiceMode, normalize_tool_action
+    sid = uuid4()
+    with pytest.raises(ValueError):
+        normalize_tool_action("add_item", {"item_id":"made-up", "quantity":1}, mode=VoiceMode.blind, session_id=sid)
+    with pytest.raises(ValueError):
+        normalize_tool_action("set_quantity", {"item_id":"burger", "quantity":99}, mode=VoiceMode.blind, session_id=sid)
+
+def test_voice_categories_and_state_screens():
+    from uuid import uuid4
+    from app.voice import LiveCart, VoiceMode, canonical_category, make_envelope, validate_payload
+    sid = uuid4(); cart = LiveCart()
+    assert canonical_category("food") == "mains"
+    action, payload = validate_payload("select_category", {"category":"breakfast"}, mode=VoiceMode.blind)
+    cart.apply(action, payload)
+    assert make_envelope(session_id=sid, mode=VoiceMode.blind, action=action, payload=payload, cart=cart).state.category == "breakfast"
+    action, payload = validate_payload("add_item", {"item_id":"pancakes"}, mode=VoiceMode.blind); cart.apply(action, payload)
+    action, payload = validate_payload("review_order", {}, mode=VoiceMode.blind); cart.apply(action, payload); assert cart.snapshot().screen == "checkout"
+    action, payload = validate_payload("confirm_order", {}, mode=VoiceMode.blind); cart.apply(action, payload); assert cart.snapshot().screen == "submit_pending"
+
+def test_cart_total_quantity_and_note_caps():
+    from app.voice import LiveCart, VoiceAction
+    cart = LiveCart(); cart.apply(VoiceAction.add_item, {"item_id":"burger", "quantity":20})
+    cart.apply(VoiceAction.add_item, {"item_id":"coffee", "quantity":20})
+    assert len(cart.snapshot().items) == 2
+    cart = LiveCart(); cart.apply(VoiceAction.add_item, {"item_id":"coffee", "quantity":1})
+    for i in range(10): cart.apply(VoiceAction.add_note, {"item_id":"coffee", "note":f"note {i}"})
+    with pytest.raises(ValueError): cart.apply(VoiceAction.add_note, {"item_id":"coffee", "note":"extra"})
+
+def test_ui_category_mapping_and_tool_schemas():
+    from app.voice import CATEGORIES, tool_declarations
+    assert CATEGORIES == {"mains":["burger", "pizza"], "breakfast":["pancakes", "toast"], "bowls":["corn", "salad"], "drinks":["iced-tea", "lemonade", "coffee"]}
+    decls = {d["name"]: d["parameters"] for d in tool_declarations()[0]["function_declarations"]}
+    assert decls["select_category"]["properties"]["category"]["enum"] == ["mains", "breakfast", "bowls", "drinks"]
+    assert decls["set_quantity"]["required"] == ["item_id", "quantity"]
+    assert decls["add_note"]["required"] == ["item_id", "note"]
+    assert decls["review_order"] == {"type":"object", "properties":{}}
+    assert decls["finish_customization"] == {"type":"object", "properties":{}}
+
+def test_normal_prompt_contains_canonical_active_item_and_cart():
+    from app.voice import LiveContext, VoiceMode, system_prompt
+    prompt = system_prompt(VoiceMode.normal, LiveContext(active_item_id="burger", order=[{"id":"burger", "quantity":1, "preferences":["No onions"]}]))
+    assert "active_item_id" in prompt and "burger" in prompt and "No onions" in prompt
+    assert "unit_price" not in prompt and "price_cents" not in prompt
+
+def test_live_cart_dedupes_notes_case_insensitively():
+    from app.voice import LiveCart, LiveContext, VoiceAction
+    cart = LiveCart(LiveContext(order=[{"id":"coffee", "quantity":1, "preferences":["Less ice", "less ICE"]}]))
+    assert cart.snapshot().items[0]["preferences"] == ["Less ice"]
+    cart.apply(VoiceAction.add_note, {"item_id":"coffee", "note":"LESS ice"})
+    assert cart.snapshot().items[0]["preferences"] == ["Less ice"]
+
+def test_blind_item_customization_flow_and_explicit_review():
+    from app.voice import LiveCart, VoiceAction
+    cart = LiveCart()
+    assert cart.snapshot().screen == "menu"
+    cart.apply(VoiceAction.add_item, {"item_id":"burger", "quantity":1})
+    assert cart.snapshot().screen == "preferences" and cart.snapshot().active_item_id == "burger"
+    cart.apply(VoiceAction.finish_customization, {})
+    assert cart.snapshot().screen == "menu"
+    cart.apply(VoiceAction.continue_ordering, {})
+    assert cart.snapshot().screen == "menu"
+    cart.apply(VoiceAction.review_order, {})
+    assert cart.snapshot().screen == "checkout"
+
+def test_review_requires_explicit_action_and_non_empty_cart():
+    from app.voice import LiveCart, VoiceAction
+    cart = LiveCart()
+    with pytest.raises(ValueError):
+        cart.apply(VoiceAction.review_order, {})
+    cart.apply(VoiceAction.add_item, {"item_id":"pizza", "quantity":1})
+    assert cart.snapshot().screen == "preferences"
+
+@pytest.mark.asyncio
+async def test_blind_opening_turn_only_for_blind_mode():
+    from app.live import maybe_send_blind_opening_turn
+    from app.voice import VoiceMode
+    class FakeSession:
+        def __init__(self): self.calls = 0
+        async def send_client_content(self, **kwargs): self.calls += 1
+    class FakeTypes:
+        class Content:
+            def __init__(self, **kwargs): pass
+        class Part:
+            def __init__(self, **kwargs): pass
+    blind = FakeSession(); wake = FakeSession()
+    assert await maybe_send_blind_opening_turn(blind, FakeTypes, VoiceMode.blind) is True
+    assert blind.calls == 1
+    assert await maybe_send_blind_opening_turn(wake, FakeTypes, VoiceMode.wake) is False
+    assert wake.calls == 0
+
+@pytest.mark.asyncio
+async def test_live_registry_duplicate_reservation_and_release():
+    from app import live
+    live._active_connections.clear()
+    token = await live.reserve_live_connection("kiosk-a")
+    assert token
+    assert await live.reserve_live_connection("kiosk-a") is None
+    assert await live.bind_live_connection("kiosk-a", token, "client-session") is True
+    assert await live.owns_live_connection("kiosk-a", token) is True
+    await live.release_live_connection("kiosk-a", token)
+    assert live._active_connections == {}
+
+def test_wake_activation_is_terminal_server_side():
+    from app.live import is_terminal_wake_activation
+    from app.voice import VoiceMode
+    assert is_terminal_wake_activation(VoiceMode.wake, "activate_blind_mode") is True
+    assert is_terminal_wake_activation(VoiceMode.blind, "activate_blind_mode") is False
+
+@pytest.mark.asyncio
+async def test_live_ws_cleanup_on_no_key_and_invalid_start(monkeypatch):
+    from app import live
+    live._active_connections.clear()
+    class FakeWS:
+        def __init__(self, text=None):
+            self.headers = {"origin":"http://localhost:8000", "host":"localhost:8000"}
+            self.cookies = {live.SESSION_COOKIE:"kiosk-cleanup"}
+            self.text = text; self.accepted = False; self.closed = False; self.sent = []
+        async def accept(self): self.accepted = True
+        async def close(self, code=None): self.closed = True; self.code = code
+        async def send_json(self, payload): self.sent.append(payload)
+        async def receive_text(self): return self.text
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    await live.live_ws(FakeWS())
+    assert live._active_connections == {}
+    monkeypatch.setenv("GEMINI_API_KEY", "configured-but-not-used")
+    await live.live_ws(FakeWS('{"type":"bad"}'))
+    assert live._active_connections == {}
 
 def test_scan_reset_pause_behavior():
     from app.inference import InferenceEngine

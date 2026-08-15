@@ -43,6 +43,12 @@ Apply `schema.sql`. Set `SUPABASE_URL` and server-only `SUPABASE_SERVICE_ROLE_KE
 
 Fresh setup uses `payload_hash text not null` to bind each `Idempotency-Key` to the canonical server-normalized order payload. Existing development tables should run the migration notes in `schema.sql`. RLS is enabled with no broad anon/authenticated policies; the service-role key remains server-only, is used only by this backend's REST calls, and bypasses RLS.
 
+## Gemini Live voice relay
+
+Set server-only `GEMINI_API_KEY`. Settings are loaded from `backend/.env`; if only `GEMINI_API_KEY` is missing there, the backend safely falls back to repo-root `.env` without logging or returning the value. Optional: `GEMINI_LIVE_MODEL` (default `gemini-3.1-flash-live-preview`), `GEMINI_LIVE_VOICE` (default `Kore`), and `GEMINI_LIVE_LANGUAGE` (default `en-US`). The browser never receives provider keys; it connects to same-origin `WS /ws/live`.
+
+Client events: `start` with `mode` (`wake`, `normal`, `blind`), UUID `session_id`, optional context; `audio` with 16 kHz mono PCM16 base64; `stop`. Server events: `ready`, PCM `audio` with sample rate/mime, normalized `state` VoiceActionEnvelope, `wake_detected`, `interrupted`, `go_away`, and generic `error`. `/ws/live` requires an exact same-origin browser origin (or explicit `LIVE_WS_ALLOWED_ORIGINS`) and reserves one active in-process connection per `kiosk_session` cookie; duplicates are closed with try-again/policy close codes, and registry entries are released on all exits. Wake activation is terminal server-side: after one `wake_detected`, that provider session is stopped to prevent duplicate activation events. Blind mode receives one backend-initiated opening turn so the first audible response greets and asks “What would you like to order?” Wake mode remains silent. Gemini tool arguments are validated and canonicalized against backend `MENU`; categories are `mains`, `breakfast`, `bowls`, `drinks`; `add_item` moves to `preferences`, `finish_customization`/`continue_ordering` returns to menu, `review_order` sets checkout only on explicit review/checkout request with a non-empty cart, and `confirm_order` is the deliberate spoken-affirmative submission signal (`submit_pending`). Free-form notes are plain normalized text with control-character, count, dedupe, and length bounds. Optional `GEMINI_LIVE_MAX_SESSIONS` tunes total in-process concurrency.
+
 ## Verification
 
 ```bash

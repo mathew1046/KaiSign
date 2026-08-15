@@ -1,15 +1,15 @@
 import os, uuid, time, base64, hashlib, json
 from pathlib import Path
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, WebSocket
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
-from dotenv import load_dotenv
 import httpx
+from .config import ROOT, load_settings
 from .menu import MENU, validate_and_total
+from .live import live_ws
 from .inference import InferenceEngine, resample_sequence, aggregate_label, DISPLAY_WORD, confidence_passes
 
-ROOT = Path(__file__).resolve().parents[2]
-load_dotenv(Path(__file__).resolve().parents[1] / ".env")
+load_settings()
 MAX_BODY = 1_500_000
 SESSION_COOKIE = "kiosk_session"
 
@@ -156,6 +156,10 @@ async def orders(request: Request):
     if r.status_code >= 300: return error("persistence_failed", "Supabase insert failed", 503)
     ORDERS_CACHE[key] = {"order_id": oid, "payload_hash": payload_hash}
     return {"persisted": True, "order_id": oid, "duplicate": False}
+
+@app.websocket("/ws/live")
+async def websocket_live(websocket: WebSocket):
+    await live_ws(websocket)
 
 ui = ROOT / "restaurant-order-ui"
 app.mount("/", StaticFiles(directory=ui, html=True), name="ui")

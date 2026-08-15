@@ -1,3 +1,4 @@
+import re
 from decimal import Decimal, ROUND_HALF_UP
 
 MENU = {
@@ -18,6 +19,31 @@ VALID_PREFERENCES = {
     "Extra sugar", "Less sugar", "Double sugar", "No sugar", "Add sugar",
     "Extra salt", "Less salt", "Double salt", "No salt", "Add salt",
 }
+MAX_NOTES_PER_ITEM = 10
+MAX_NOTE_CHARS = 160
+
+def sanitize_note(value):
+    if not isinstance(value, str):
+        raise ValueError("invalid note")
+    note = re.sub(r"\s+", " ", value).strip()
+    note = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", "", note)
+    if not note or len(note) > MAX_NOTE_CHARS:
+        raise ValueError("invalid note")
+    return note
+
+def normalize_preferences(prefs):
+    if not isinstance(prefs, list) or len(prefs) > MAX_NOTES_PER_ITEM:
+        raise ValueError("invalid preference")
+    normalized = []
+    for pref in prefs:
+        if pref in VALID_PREFERENCES:
+            normalized.append(pref)
+        else:
+            try:
+                normalized.append(sanitize_note(pref))
+            except ValueError as exc:
+                raise ValueError("invalid preference") from exc
+    return normalized
 
 def cents(d: Decimal) -> int:
     return int((d * 100).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
@@ -34,9 +60,7 @@ def validate_and_total(items):
         qty = item.get("quantity")
         if not isinstance(qty, int) or qty < 1 or qty > 20:
             raise ValueError("invalid quantity")
-        prefs = item.get("preferences", [])
-        if not isinstance(prefs, list) or len(prefs) > 10 or any(p not in VALID_PREFERENCES for p in prefs):
-            raise ValueError("invalid preference")
+        prefs = normalize_preferences(item.get("preferences", []))
         row = MENU[iid]
         line = row["price"] * qty
         subtotal += line
