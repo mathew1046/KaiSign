@@ -4,7 +4,7 @@ from uuid import UUID, uuid4
 
 from pydantic import BaseModel, Field, field_validator
 
-from .menu import MENU, MAX_NOTES_PER_ITEM, sanitize_note
+from .menu import MENU, MAX_NOTES_PER_ITEM, sanitize_note, validate_and_total
 
 
 class VoiceMode(str, Enum):
@@ -35,6 +35,8 @@ CATEGORIES = {
     "drinks": ["iced-tea", "lemonade", "coffee"],
 }
 CATEGORY_ALIASES = {"food": "mains", "main": "mains", "beverages": "drinks", "drink": "drinks", "bowl": "bowls"}
+WAKE_PHRASE = "Hey Kaizen"
+BLIND_OPENING_GREETING = "Hello, welcome to Kaizen. We have mains, breakfast, bowls, and drinks. Which category or item would you like to order?"
 
 
 class VoiceState(BaseModel):
@@ -76,7 +78,12 @@ def canonical_category(value: Any) -> str:
 
 def menu_context(category: str | None = None):
     ids = CATEGORIES.get(category, list(MENU)) if category else list(MENU)
-    return {"categories": CATEGORIES, "items": {iid: {"name": MENU[iid]["name"]} for iid in ids}}
+    return {"categories": CATEGORIES, "items": {iid: {"name": MENU[iid]["name"], "price": _format_cents(int(MENU[iid]["price"] * 100)), "price_cents": int(MENU[iid]["price"] * 100)} for iid in ids}}
+
+
+def _format_cents(value: int) -> str:
+    dollars, cents = divmod(value, 100)
+    return f"${dollars}.{cents:02d}"
 
 
 def _append_note_unique(prefs: list[str], note: str):
@@ -101,6 +108,25 @@ class LiveCart:
 
     def snapshot(self) -> VoiceState:
         return VoiceState(category=self.category, items=list(self.items.values()), screen=self.screen, active_item_id=self.active_item_id)
+
+    def checkout_summary(self) -> dict[str, Any]:
+        totals = validate_and_total(list(self.items.values()))
+        lines = []
+        for item in totals["items"]:
+            prefs = item["preferences"]
+            pref_text = f" with preferences: {', '.join(prefs)}" if prefs else " with no preferences"
+            lines.append(f'{item["quantity"]} {item["name"]}{pref_text}, line total {_format_cents(item["line_total_cents"])}')
+        spoken = "Your order is: " + "; ".join(lines) + f'. Subtotal {_format_cents(totals["subtotal_cents"])}. Tax {_format_cents(totals["tax_cents"])}. Total {_format_cents(totals["total_cents"])}. Would you like to confirm this order?'
+        return {
+            "items": totals["items"],
+            "subtotal": _format_cents(totals["subtotal_cents"]),
+            "tax": _format_cents(totals["tax_cents"]),
+            "total": _format_cents(totals["total_cents"]),
+            "subtotal_cents": totals["subtotal_cents"],
+            "tax_cents": totals["tax_cents"],
+            "total_cents": totals["total_cents"],
+            "spoken_summary": spoken,
+        }
 
     def total_qty_without(self, item_id: str | None = None) -> int:
         return sum(v["quantity"] for k, v in self.items.items() if k != item_id)
@@ -186,8 +212,8 @@ def tool_declarations():
 
 def system_prompt(mode: VoiceMode, context: LiveContext | None = None) -> str:
     base = "Use only provided tools for all cart/order mutations. Never invent item ids, names, prices, or unavailable category items."
-    if mode == VoiceMode.wake: return 'Silently listen. Call only activate_blind_mode upon the exact phrase "HEY KAISIGN". No audio/text otherwise.'
+    if mode == VoiceMode.wake: return f'Silently listen. Call only activate_blind_mode upon the exact phrase "{WAKE_PHRASE}". No audio/text otherwise.'
     initial = LiveCart(context).snapshot().model_dump(mode="json")
     ctx = " Canonical current context (no prices): " + str(initial) + "."
     if mode == VoiceMode.normal: return base + ctx + " Accept spoken preferences only for active_item_id; emit add_note/remove_note tools only using that canonical item id; use finish_customization when preferences are declined or complete."
-    return base + ctx + ' Your first audible response must be a short professional greeting followed by exactly: "What would you like to order?" select_category uses only mains, breakfast, bowls, drinks and after category selection speak only items in that category. After add_item, ask whether the user wants preferences for that item. If preferences are declined or complete, call finish_customization/continue_ordering and invite another item or an explicit review request. Never call review_order unless the user explicitly asks to review or checkout and the cart is non-empty. review_order shows checkout. Never call confirm_order unless the user gives final affirmative confirmation after review. Do not auto-review because an item was added.'
+    return base + ctx + f' Your first audible response must be exactly: "{BLIND_OPENING_GREETING}" Then state the available categories: mains, breakfast, bowls, drinks, and ask which category or item they want. Stay engaged in a natural spoken turn-by-turn ordering conversation: listen, respond or confirm succinctly, ask one relevant follow-up at a time, and mutate order state only through validated tools. select_category uses only mains, breakfast, bowls, drinks and after category selection read the selected category items with their canonical prices from MENU. If the user explicitly asks for the full menu, narrate categories, items, and prices from the supplied MENU data. After add_item, ask whether the user wants preferences for that item. If preferences are declined or complete, call finish_customization/continue_ordering and invite another item or an explicit review request. Never call review_order unless the user explicitly asks to review or checkout and the cart is non-empty. review_order shows checkout; when its tool response includes checkout_summary, speak checkout_summary.spoken_summary verbatim and completely, including every item, quantity, preference, subtotal, tax, and total, before asking for yes/no final confirmation. Never call confirm_order unless the user gives final affirmative confirmation after hearing the full server checkout summary. Do not auto-review because an item was added. End the session only when the user explicitly asks to end, stop, cancel, or is clearly done leaving.'

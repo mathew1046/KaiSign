@@ -1,4 +1,4 @@
-"""Replay one 8-12 frame JPEG clip through /api/infer; one request == one KNN window."""
+"""Replay one 8-12 frame JPEG clip through /api/infer; one request == one sign-classifier window."""
 from pathlib import Path
 import base64, sys, uuid
 BACKEND = Path(__file__).resolve().parents[1]; ROOT = Path(__file__).resolve().parents[2]

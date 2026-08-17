@@ -1,0 +1,26 @@
+[Unit]
+Description=Restaurant kiosk FastAPI backend
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=kaizen
+WorkingDirectory=/home/kaizen/kaizen/custom_dataset_camera/backend
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONMALLOC=malloc
+Environment=MALLOC_ARENA_MAX=2
+Environment=OMP_NUM_THREADS=1
+Environment=OPENBLAS_NUM_THREADS=1
+Environment=MKL_NUM_THREADS=1
+Environment=NUMEXPR_NUM_THREADS=1
+Environment=GEMINI_LIVE_MAX_SESSIONS=1
+Environment=KIOSK_MODEL_PATH=/home/kaizen/kaizen/custom_dataset_camera/backend/runtime_assets/logistic_sign_classifier.npz
+Environment=KIOSK_HAND_LANDMARKER_PATH=/home/kaizen/kaizen/wlasl_signs_model/hand_landmarker.task
+ExecStart=/home/kaizen/kaizen/custom_dataset_camera/backend/.venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 1
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

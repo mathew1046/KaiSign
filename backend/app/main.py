@@ -14,7 +14,7 @@ MAX_BODY = 1_500_000
 SESSION_COOKIE = "kiosk_session"
 
 def env(name, default): return os.getenv(name, default)
-engine = InferenceEngine(ROOT, env("KIOSK_MODEL_PATH", "training/runs/custom_10_words/models/knn_3.joblib"), env("KIOSK_HAND_LANDMARKER_PATH", "../wlasl_signs_model/hand_landmarker.task"), float(env("KIOSK_MIN_PROBABILITY", "0.85")), int(env("KIOSK_MIN_DETECTED_FRAMES", "5")), int(env("KIOSK_BUFFER_SECONDS", "2")))
+engine = InferenceEngine(ROOT, env("KIOSK_MODEL_PATH", "backend/runtime_assets/logistic_sign_classifier.npz"), env("KIOSK_HAND_LANDMARKER_PATH", "../wlasl_signs_model/hand_landmarker.task"), float(env("KIOSK_MIN_PROBABILITY", "0.85")), int(env("KIOSK_MIN_DETECTED_FRAMES", "5")), int(env("KIOSK_BUFFER_SECONDS", "2")), int(env("KIOSK_MAX_INFERENCE_SESSIONS", "1")), int(env("KIOSK_INFERENCE_SESSION_TTL_SECONDS", "120")), int(env("KIOSK_INFERENCE_FRAME_INTERVAL_MS", "200")))
 MIN_HAND_DETECTION_CONFIDENCE = float(env("KIOSK_MIN_HAND_DETECTION_CONFIDENCE", "0.35"))
 MIN_TRACKING_CONFIDENCE = float(env("KIOSK_MIN_TRACKING_CONFIDENCE", "0.35"))
 CLIP_MIN_FRAMES = int(env("KIOSK_CLIP_MIN_FRAMES", "8"))
@@ -41,6 +41,9 @@ async def limits_and_session(request: Request, call_next):
 @app.on_event("startup")
 async def startup(): engine.startup()
 
+@app.on_event("shutdown")
+async def shutdown(): engine.close()
+
 @app.get("/api/health")
 async def health():
     return {"ok": True, "inference_ready": engine.ready, "prediction_windows": engine.prediction_windows, "inference_requests": engine.inference_requests, "supabase_configured": bool(os.getenv("SUPABASE_URL") and (os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_SECRET_KEY")))}
@@ -64,18 +67,17 @@ async def infer(request: Request):
     frames = data.get("frames")
     if not isinstance(frames, list) or not (CLIP_MIN_FRAMES <= len(frames) <= CLIP_MAX_FRAMES): return error("bad_frames", f"frames must contain {CLIP_MIN_FRAMES}-{CLIP_MAX_FRAMES} JPEG data URLs", 422)
     if any((not isinstance(f, str) or not f.startswith("data:image/jpeg;base64,")) for f in frames): return error("bad_frame", "JPEG data URLs required", 415)
-    state = engine.get_state(request.state.session_id); engine.reset_if_new_scan(state, scan_id); state.last_seen = time.time()
+    state = engine.get_state(request.state.session_id, scan_id)
+    if state is None:
+        return {"scan_id":scan_id,"accepted":False,"inference_paused":False,"status":"released","window_complete":False,"display_text":""}
+    engine.reset_if_new_scan(state, scan_id); state.last_seen = time.time()
     if state.paused:
         return {"scan_id": scan_id, "accepted": bool(state.last_completed), "inference_paused": True, "status": "completed", "display_text": state.last_completed or "Inference paused", "recognized": {"preference": state.last_completed} if state.last_completed else None}
     if clip_seq <= state.last_frame_seq:
         return {"scan_id":scan_id,"accepted":False,"inference_paused":False,"status":"stale_clip","window_complete":False,"display_text":""}
     state.last_frame_seq = clip_seq
     try:
-        import cv2, numpy as np, mediapipe as mp
-        from mediapipe.tasks.python import BaseOptions, vision
-        if state.landmarker is None:
-            opts = vision.HandLandmarkerOptions(base_options=BaseOptions(model_asset_path=str(engine.landmarker_path)), running_mode=vision.RunningMode.VIDEO, num_hands=2, min_hand_detection_confidence=MIN_HAND_DETECTION_CONFIDENCE, min_tracking_confidence=MIN_TRACKING_CONFIDENCE)
-            state.landmarker = vision.HandLandmarker.create_from_options(opts)
+        import cv2, numpy as np
         from .inference import order_hands, normalize_frame
         state.reset_window(None)
         total_decoded = 0
@@ -85,9 +87,8 @@ async def infer(request: Request):
             arr = np.frombuffer(raw, dtype=np.uint8); bgr = cv2.imdecode(arr, cv2.IMREAD_COLOR)
             if bgr is None: return error("bad_frame", "invalid JPEG", 415)
             rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
-            img = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
-            state.timestamp_ms += 200
-            res = state.landmarker.detect_for_video(img, state.timestamp_ms)
+            img = engine.mp.Image(image_format=engine.mp.ImageFormat.SRGB, data=rgb)
+            res = engine.detect_frame(img, MIN_HAND_DETECTION_CONFIDENCE, MIN_TRACKING_CONFIDENCE)
             vec = normalize_frame(order_hands(res)).reshape(-1)
             state.buffer.append(vec)
             if vec.any(): state.detected += 1
@@ -107,13 +108,33 @@ async def infer(request: Request):
     except Exception as exc:
         return error("inference_failed", "Preference recognition is temporarily unavailable.", 503)
 
+@app.post("/api/infer/release")
+async def infer_release(request: Request):
+    scan_id = request.query_params.get("scan_id")
+    if scan_id is not None:
+        try: scan_id = str(uuid.UUID(scan_id))
+        except Exception: return error("bad_scan_id", "scan_id must be a UUID", 422)
+    engine.release_state(request.state.session_id, scan_id)
+    return {"released": True}
+
 ORDERS_CACHE = {}
+ORDERS_CACHE_TTL_SECONDS = int(env("KIOSK_ORDERS_CACHE_TTL_SECONDS", "1800"))
+ORDERS_CACHE_MAX_ENTRIES = int(env("KIOSK_ORDERS_CACHE_MAX_ENTRIES", "128"))
+
+def prune_orders_cache(cache, now=None):
+    now = time.time() if now is None else now
+    for k in [k for k, v in cache.items() if now - v.get("created_at", now) >= ORDERS_CACHE_TTL_SECONDS]:
+        cache.pop(k, None)
+    while len(cache) > ORDERS_CACHE_MAX_ENTRIES:
+        oldest = min(cache, key=lambda k: cache[k].get("created_at", 0))
+        cache.pop(oldest, None)
 
 def canonical_payload_hash(normalized):
     body = json.dumps(normalized, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(body.encode("utf-8")).hexdigest()
 
 def cached_idempotency_response(cache, key, payload_hash):
+    prune_orders_cache(cache)
     cached = cache.get(key)
     if not cached: return None
     if cached["payload_hash"] != payload_hash:
@@ -150,11 +171,11 @@ async def orders(request: Request):
             row = q.json()[0]
             if row.get("payload_hash") != payload_hash:
                 return error("idempotency_conflict", "Idempotency-Key was already used for a different order", 409)
-            ORDERS_CACHE[key] = {"order_id": row["id"], "payload_hash": payload_hash}
+            ORDERS_CACHE[key] = {"order_id": row["id"], "payload_hash": payload_hash, "created_at": time.time()}; prune_orders_cache(ORDERS_CACHE)
             return {"persisted": True, "order_id": row["id"], "duplicate": True}
         return error("duplicate_conflict", "idempotency key already exists", 409)
     if r.status_code >= 300: return error("persistence_failed", "Supabase insert failed", 503)
-    ORDERS_CACHE[key] = {"order_id": oid, "payload_hash": payload_hash}
+    ORDERS_CACHE[key] = {"order_id": oid, "payload_hash": payload_hash, "created_at": time.time()}; prune_orders_cache(ORDERS_CACHE)
     return {"persisted": True, "order_id": oid, "duplicate": False}
 
 @app.websocket("/ws/live")

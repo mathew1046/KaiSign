@@ -4,7 +4,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.config import gemini_api_key_loaded, gemini_model, load_settings
-from app.voice import tool_declarations
+from app.voice import WAKE_PHRASE, tool_declarations
 
 
 def sdk_tools(types):
@@ -21,12 +21,12 @@ async def main():
         from google import genai
         from google.genai import types
         client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
-        config = types.LiveConnectConfig(response_modalities=["AUDIO"], system_instruction='Call activate_blind_mode when the user says exactly "HEY KAISIGN". Do not speak before calling the tool.', tools=sdk_tools(types))
+        config = types.LiveConnectConfig(response_modalities=["AUDIO"], system_instruction=f'Call activate_blind_mode when the user says exactly "{WAKE_PHRASE}". Do not speak before calling the tool.', tools=sdk_tools(types))
         async with client.aio.live.connect(model=gemini_model(), config=config) as session:
             try:
-                await session.send_client_content(turns=types.Content(role="user", parts=[types.Part(text="HEY KAISIGN")]), turn_complete=True)
+                await session.send_client_content(turns=types.Content(role="user", parts=[types.Part(text=WAKE_PHRASE)]), turn_complete=True)
             except AttributeError:
-                await session.send(input="HEY KAISIGN", end_of_turn=True)
+                await session.send(input=WAKE_PHRASE, end_of_turn=True)
             deadline = asyncio.get_running_loop().time() + 20
             ok = False
             while not ok and asyncio.get_running_loop().time() < deadline:

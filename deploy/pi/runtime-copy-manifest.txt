@@ -1,0 +1,30 @@
+# Raspberry Pi runtime copy manifest
+# Target repo root: /home/kaizen/kaizen/custom_dataset_camera
+# External model root: /home/kaizen/kaizen/wlasl_signs_model
+# Python runtime: uv-managed Python 3.12 venv at backend/.venv
+# Unsupported on Pi: system/local Python 3.13 for MediaPipe wheels
+
+# Required repository paths to copy/update on the Pi:
+backend/app/
+backend/runtime_assets/logistic_sign_classifier.npz
+backend/requirements-runtime.txt
+backend/requirements-pi-base.txt
+backend/requirements-pi-mediapipe.txt
+backend/README.md
+restaurant-order-ui/
+deploy/pi/backend.service
+deploy/pi/chromium-kiosk.sh
+deploy/pi/install-runtime.sh
+deploy/pi/measure-memory.sh
+deploy/pi/README.md
+deploy/pi/runtime-copy-manifest.txt
+
+# Required external MediaPipe hand landmarker:
+# source:      ../wlasl_signs_model/hand_landmarker.task
+# destination: /home/kaizen/kaizen/wlasl_signs_model/hand_landmarker.task
+
+# Explicitly not copied: training/, cached datasets, sklearn/joblib models,
+# backend/tests/, backend/scripts/, alternate model artifacts, .env files, secrets.
+# Run deploy/pi/install-runtime.sh. It uses uv Python 3.12, disk-backed
+# PROJECT_ROOT/.pip-tmp instead of /tmp, binary wheels only, then installs
+# mediapipe==0.10.18 with --no-deps. Do not build MediaPipe from source.

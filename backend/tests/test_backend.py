@@ -183,6 +183,91 @@ def test_numeric_class_ids_map_to_training_words():
     assert e.class_to_label(9) == "salt"
     assert TRAINING_WORDS == ["more", "less", "double", "cheese", "butter", "sugar", "without", "add", "no", "salt"]
 
+def test_npz_runtime_loader_softmax(tmp_path):
+    import numpy as np
+    from app.inference import FEATURE_WIDTH, load_runtime_model
+    p = tmp_path / "model.npz"
+    coef = np.zeros((2, FEATURE_WIDTH), dtype=np.float32); coef[1, 0] = 2.0
+    np.savez(p, format_version=np.array("1"), feature_width=np.array(FEATURE_WIDTH), mean=np.zeros(FEATURE_WIDTH, dtype=np.float32), scale=np.ones(FEATURE_WIDTH, dtype=np.float32), coef=coef, intercept=np.array([1000.0, 1000.0], dtype=np.float32), classes=np.array([0, 1]))
+    m = load_runtime_model(p)
+    probs = m.predict_proba(np.array([[1.0] + [0.0] * (FEATURE_WIDTH - 1)], dtype=np.float32))[0]
+    assert list(m.classes_) == [0, 1]
+    assert probs[1] == pytest.approx(0.880797, rel=1e-5)
+    assert float(probs.sum()) == pytest.approx(1.0)
+
+def test_npz_runtime_loader_rejects_unsupported_format(tmp_path):
+    import numpy as np
+    from app.inference import FEATURE_WIDTH, load_runtime_model
+    p = tmp_path / "model.npz"
+    np.savez(p, format_version=np.array("999"), feature_width=np.array(FEATURE_WIDTH), mean=np.zeros(FEATURE_WIDTH, dtype=np.float32), scale=np.ones(FEATURE_WIDTH, dtype=np.float32), coef=np.zeros((2, FEATURE_WIDTH), dtype=np.float32), intercept=np.zeros(2, dtype=np.float32), classes=np.array([0, 1]))
+    with pytest.raises(ValueError, match="unsupported npz format_version"):
+        load_runtime_model(p)
+
+def test_inference_sessions_bounded_ttl_and_release():
+    from app.inference import InferenceEngine
+    e = InferenceEngine(__import__("pathlib").Path("."), "missing", "missing", .67, 5, 2, max_sessions=1, session_ttl_seconds=1)
+    s1 = e.get_state("a"); s1.last_seen = 10
+    s2 = e.get_state("b")
+    assert "a" not in e.sessions and e.sessions["b"] is s2
+    e.sessions["old"] = ScanState(last_seen=0)
+    import time as _time
+    now = _time.time()
+    e.sessions["old"].last_seen = now - 2
+    e.get_state("c")
+    assert "old" not in e.sessions
+    e._landmarker = type("LM", (), {"close": lambda self: setattr(self, "closed", True)})()
+    e.release_state("c")
+    assert e.sessions == {} and e._landmarker is None
+
+def test_inference_ttl_prune_closes_shared_landmarker():
+    from app.inference import InferenceEngine
+    e = InferenceEngine(__import__("pathlib").Path("."), "missing", "missing", .67, 5, 2, session_ttl_seconds=1)
+    e.sessions["old"] = ScanState(last_seen=0)
+    e._landmarker = type("LM", (), {"close": lambda self: None})()
+    import time as _time
+    e.sessions["old"].last_seen = _time.time() - 2
+    e.get_state("new")
+    assert "old" not in e.sessions and e._landmarker is None
+
+def test_released_scan_tombstone_blocks_same_scan_and_bounds():
+    from app.inference import InferenceEngine
+    e = InferenceEngine(__import__("pathlib").Path("."), "missing", "missing", .67, 5, 2, max_released_scans=2)
+    e.release_state("sid", "scan-a")
+    assert e.get_state("sid", "scan-a") is None
+    assert e.get_state("sid", "scan-b") is not None
+    e.release_state("sid", "scan-b"); e.release_state("sid", "scan-c")
+    assert len(e.released_scans) == 2 and ("sid", "scan-a") not in e.released_scans
+
+def test_released_scan_infer_response_is_benign_not_paused():
+    from uuid import uuid4
+    from fastapi.testclient import TestClient
+    from app import main
+    scan_id = str(uuid4()); sid = "released-session"
+    main.engine.ready = True
+    main.engine.release_state(sid, scan_id)
+    with TestClient(main.app) as client:
+        r = client.post("/api/infer", cookies={main.SESSION_COOKIE: sid}, json={"scan_id": scan_id, "clip_seq": 1, "item": {"id":"burger", "quantity":1}, "frames": ["data:image/jpeg;base64,AA=="] * main.CLIP_MIN_FRAMES})
+    assert r.status_code == 200
+    assert r.json() == {"scan_id":scan_id,"accepted":False,"inference_paused":False,"status":"released","window_complete":False,"display_text":""}
+
+def test_shared_landmarker_timestamp_uses_browser_frame_interval():
+    from app.inference import InferenceEngine
+    class FakeLandmarker:
+        def __init__(self): self.timestamps = []
+        def detect_for_video(self, image, timestamp): self.timestamps.append(timestamp); return object()
+    class FakeHL:
+        @staticmethod
+        def create_from_options(opts): return fake
+    class FakeVision:
+        HandLandmarkerOptions = lambda **kwargs: kwargs
+        RunningMode = type("RM", (), {"VIDEO": "VIDEO"})
+        HandLandmarker = FakeHL
+    fake = FakeLandmarker()
+    e = InferenceEngine(__import__("pathlib").Path("."), "missing", "missing", .67, 5, 2, frame_interval_ms=200)
+    e.vision = FakeVision; e.BaseOptions = lambda **kwargs: kwargs
+    e.detect_frame("img", .35, .35); e.detect_frame("img", .35, .35)
+    assert fake.timestamps == [200, 400]
+
 def test_window_reset_retains_partial_token():
     s = ScanState(window_start=1.0, detected=5)
     aggregate_label(s, "add")
@@ -253,3 +338,11 @@ def test_idempotency_same_key_different_payload_conflicts():
     b = validate_and_total([{"id":"burger","quantity":2,"preferences":[]}])
     cache = {"key": {"order_id": "order-1", "payload_hash": canonical_payload_hash(a)}}
     assert cached_idempotency_response(cache, "key", canonical_payload_hash(b)) == {"conflict": True}
+
+def test_orders_cache_ttl_and_max_eviction(monkeypatch):
+    from app import main
+    monkeypatch.setattr(main, "ORDERS_CACHE_TTL_SECONDS", 10)
+    monkeypatch.setattr(main, "ORDERS_CACHE_MAX_ENTRIES", 2)
+    cache = {"old": {"order_id":"o", "payload_hash":"h", "created_at": 0}, "a": {"order_id":"a", "payload_hash":"h", "created_at": 90}, "b": {"order_id":"b", "payload_hash":"h", "created_at": 91}, "c": {"order_id":"c", "payload_hash":"h", "created_at": 92}}
+    main.prune_orders_cache(cache, now=95)
+    assert set(cache) == {"b", "c"}

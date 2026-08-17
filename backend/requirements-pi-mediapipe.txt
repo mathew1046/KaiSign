@@ -1,0 +1,2 @@
+# Installed separately on Pi to avoid pulling heavy unused transitive deps.
+mediapipe==0.10.18

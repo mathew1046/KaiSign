@@ -29,7 +29,21 @@ const CATEGORY_IDS = {
 const NOTE_LIMIT = 10;
 const NOTE_CHAR_LIMIT = 160;
 const MAX_QUANTITY = 20;
-const QUEUED_AUDIO_LIMIT = 12;
+const PLAYBACK_QUEUE_SECONDS_LIMIT = 30;
+const CAMERA_CONSTRAINTS = {
+  video: {
+    facingMode: { ideal: "user" },
+    width: { ideal: 320, max: 320 },
+    height: { ideal: 240, max: 240 },
+    frameRate: { ideal: 8, max: 8 }
+  },
+  audio: false
+};
+const CAMERA_CONSTRAINT_ATTEMPTS = [
+  CAMERA_CONSTRAINTS,
+  { video: { facingMode: { ideal: "user" }, width: { max: 320 }, height: { max: 240 }, frameRate: { max: 8 } }, audio: false },
+  { video: { width: { max: 320 }, height: { max: 240 }, frameRate: { max: 8 } }, audio: false }
+];
 
 const state = {
   mode: "choice",
@@ -67,9 +81,12 @@ const state = {
 const app = document.querySelector("#app");
 let liveClient;
 let wakeClient;
-let micPipeline;
 let playback;
 let voice;
+let captureCanvas;
+let captureContext;
+let inferAbortController;
+let releasedInferenceScanId = "";
 
 function money(value) {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(value);
@@ -89,13 +106,6 @@ function liveUrl() {
   return `${protocol}//${location.host}${API_CONFIG.liveEndpoint}`;
 }
 
-function encodePcm16(buffer) {
-  const bytes = new Uint8Array(buffer);
-  let binary = "";
-  for (let index = 0; index < bytes.length; index += 1) binary += String.fromCharCode(bytes[index]);
-  return btoa(binary);
-}
-
 function decodeBase64Pcm(value) {
   const binary = atob(value || "");
   const bytes = new Uint8Array(binary.length);
@@ -110,14 +120,16 @@ class LivePlayback {
     this.sources = new Set();
   }
 
-  async play(pcm16Base64) {
+  async play(pcm16Base64, sampleRate = 24000) {
     const pcm = decodeBase64Pcm(pcm16Base64);
     if (!pcm.length) return;
     if (!this.context) this.context = new AudioContext();
     if (this.context.state === "suspended") await this.context.resume();
-    const buffer = this.context.createBuffer(1, pcm.length, 24000);
+    const buffer = this.context.createBuffer(1, pcm.length, sampleRate || 24000);
     const data = buffer.getChannelData(0);
     for (let index = 0; index < pcm.length; index += 1) data[index] = Math.max(-1, Math.min(1, pcm[index] / 32768));
+    const queuedUntil = Math.max(this.nextTime || 0, this.context.currentTime);
+    if (queuedUntil - this.context.currentTime + buffer.duration > PLAYBACK_QUEUE_SECONDS_LIMIT) this.clear();
     const source = this.context.createBufferSource();
     source.buffer = buffer;
     source.connect(this.context.destination);
@@ -139,59 +151,8 @@ class LivePlayback {
 
 playback = new LivePlayback();
 
-class MicrophonePipeline {
-  constructor(owner, epoch, onChunk) {
-    this.owner = owner;
-    this.epoch = epoch;
-    this.onChunk = onChunk;
-    this.stream = null;
-    this.context = null;
-    this.source = null;
-    this.node = null;
-    this.sink = null;
-  }
-
-  async start() {
-    if (this.stream) return;
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true }, video: false });
-    if (!this.owner.isPipelineCurrent(this)) {
-      stream.getTracks().forEach(track => track.stop());
-      return;
-    }
-    this.stream = stream;
-    this.context = new AudioContext();
-    await this.context.audioWorklet.addModule("./pcm-worklet.js");
-    if (!this.owner.isPipelineCurrent(this)) {
-      this.stop();
-      return;
-    }
-    this.source = this.context.createMediaStreamSource(this.stream);
-    this.node = new AudioWorkletNode(this.context, "pcm-capture");
-    this.sink = this.context.createGain();
-    this.sink.gain.value = 0;
-    this.node.port.onmessage = event => {
-      if (this.owner.isPipelineCurrent(this)) this.onChunk(event.data);
-    };
-    this.source.connect(this.node);
-    this.node.connect(this.sink).connect(this.context.destination);
-  }
-
-  stop() {
-    if (this.node) this.node.disconnect();
-    if (this.sink) this.sink.disconnect();
-    if (this.source) this.source.disconnect();
-    if (this.context) this.context.close();
-    if (this.stream) this.stream.getTracks().forEach(track => track.stop());
-    this.node = null;
-    this.source = null;
-    this.sink = null;
-    this.context = null;
-    this.stream = null;
-  }
-}
-
 class LiveClient {
-  constructor(owner, mode, context = {}, epoch) {
+  constructor(owner, mode, context = {}, epoch, options = {}) {
     this.owner = owner;
     this.mode = mode;
     this.context = context;
@@ -199,8 +160,14 @@ class LiveClient {
     this.sessionId = createId();
     this.socket = null;
     this.openTimer = null;
+    this.retryTimer = null;
     this.pending = [];
     this.ready = false;
+    this.retryPreReady = Boolean(options.retryPreReady);
+    this.retryCount = 0;
+    this.retryUntil = 0;
+    this.serverError = false;
+    this.deliberateClose = false;
   }
 
   start() {
@@ -211,6 +178,7 @@ class LiveClient {
 
   open() {
     if (!this.owner.isClientCurrent(this)) return;
+    if (this.retryPreReady && !this.retryUntil) this.retryUntil = Date.now() + 5000;
     this.socket = new WebSocket(liveUrl());
     this.socket.addEventListener("open", () => {
       if (!this.owner.isClientCurrent(this)) return this.close(false);
@@ -219,7 +187,20 @@ class LiveClient {
       this.send(start);
     });
     this.socket.addEventListener("message", event => this.receive(event));
-    this.socket.addEventListener("close", () => { if (this.owner.isClientCurrent(this)) this.ready = false; });
+    this.socket.addEventListener("close", event => {
+      if (!this.owner.isClientCurrent(this)) return;
+      const retryableCode = [1006, 1013].includes(event.code);
+      const canRetry = this.retryPreReady && !this.deliberateClose && !this.serverError && !this.ready && retryableCode && Date.now() < this.retryUntil;
+      this.ready = false;
+      if (canRetry) {
+        this.retryCount += 1;
+        const delay = Math.min(1000, 150 * (2 ** Math.min(this.retryCount - 1, 4)));
+        this.retryTimer = window.setTimeout(() => {
+          this.retryTimer = null;
+          if (this.owner.isClientCurrent(this) && !this.ready && !this.serverError && !this.deliberateClose) this.open();
+        }, delay);
+      }
+    });
     this.socket.addEventListener("error", () => { if (this.owner.isClientCurrent(this)) this.ready = false; });
   }
 
@@ -227,17 +208,6 @@ class LiveClient {
     if (!this.owner.isClientCurrent(this)) return;
     if (!this.socket || this.socket.readyState !== WebSocket.OPEN) return;
     this.socket.send(JSON.stringify(message));
-  }
-
-  sendAudio(buffer) {
-    if (!this.owner.isClientCurrent(this)) return;
-    const message = { type: "audio", pcm16_base64: encodePcm16(buffer) };
-    if (!this.ready) {
-      this.pending.push(message);
-      if (this.pending.length > QUEUED_AUDIO_LIMIT) this.pending.shift();
-      return;
-    }
-    this.send(message);
   }
 
   receive(event) {
@@ -248,15 +218,22 @@ class LiveClient {
       this.ready = true;
       this.pending.splice(0).forEach(pending => { if (this.owner.isClientCurrent(this)) this.send(pending); });
     }
-    if (message.type === "audio" && message.pcm16_base64 && this.mode === "blind" && state.mode === "blind") playback.play(message.pcm16_base64);
+    if (message.type === "audio" && message.pcm16_base64 && this.mode === "blind" && state.mode === "blind") playback.play(message.pcm16_base64, message.sample_rate).catch(() => {});
     if (message.type === "interrupted") playback.clear();
     if (message.type === "wake_detected") activateBlindMode(this);
     if (message.type === "state") applyLiveState(message, this);
-    if (message.type === "error") this.ready = false;
+    if (message.type === "error") {
+      this.serverError = true;
+      this.ready = false;
+      if (this.retryTimer) window.clearTimeout(this.retryTimer);
+      this.retryTimer = null;
+    }
   }
 
   close(sendStop = true) {
     if (this.openTimer) window.clearTimeout(this.openTimer);
+    if (this.retryTimer) window.clearTimeout(this.retryTimer);
+    this.deliberateClose = true;
     this.pending = [];
     this.ready = false;
     if (this.socket && this.socket.readyState === WebSocket.OPEN && sendStop && this.owner.isClientCurrent(this)) this.send({ type: "stop" });
@@ -270,7 +247,6 @@ class VoiceController {
     this.epoch = 0;
     this.kind = "none";
     this.client = null;
-    this.pipeline = null;
     this.transitioning = false;
   }
 
@@ -278,67 +254,33 @@ class VoiceController {
     return this.client === client && client.epoch === this.epoch;
   }
 
-  isPipelineCurrent(pipeline) {
-    return this.pipeline === pipeline && pipeline.epoch === this.epoch;
-  }
-
   async start(kind, context = {}, options = {}) {
     const previousClient = this.client;
-    const previousPipeline = this.pipeline;
     if (previousClient) previousClient.close(true);
     this.epoch += 1;
     const epoch = this.epoch;
-    const reuseMic = Boolean(options.reuseMic && previousPipeline);
     this.kind = kind;
     this.client = null;
-    this.pipeline = reuseMic ? previousPipeline : null;
-    if (!reuseMic && previousPipeline) previousPipeline.stop();
-    const client = new LiveClient(this, kind, context, epoch);
+    const client = new LiveClient(this, kind, context, epoch, options);
     this.client = client;
     liveClient = kind === "wake" ? null : client;
     wakeClient = kind === "wake" ? client : null;
-    if (this.pipeline) {
-      this.pipeline.epoch = epoch;
-      this.pipeline.onChunk = buffer => client.sendAudio(buffer);
-    } else {
-      this.pipeline = new MicrophonePipeline(this, epoch, buffer => client.sendAudio(buffer));
-    }
-    micPipeline = this.pipeline;
     client.start();
-    try {
-      await this.pipeline.start();
-    } catch {
-      if (this.epoch === epoch && this.pipeline) {
-        this.pipeline.stop();
-        this.pipeline = null;
-        micPipeline = null;
-      }
-    }
-    if (this.epoch !== epoch) return;
-    if (this.pipeline && !this.pipeline.stream) {
-      this.pipeline = null;
-      micPipeline = null;
-    }
   }
 
   stop() {
     const client = this.client;
-    const pipeline = this.pipeline;
     if (client) client.close(true);
     this.epoch += 1;
     this.kind = "none";
     this.client = null;
-    this.pipeline = null;
     liveClient = null;
     wakeClient = null;
-    micPipeline = null;
-    if (pipeline) pipeline.stop();
   }
 
   async activateBlindFromWake(sourceClient) {
     if (this.transitioning || state.mode !== "choice" || this.kind !== "wake" || !this.isClientCurrent(sourceClient)) return;
     this.transitioning = true;
-    const pipeline = this.pipeline;
     sourceClient.close(true);
     this.epoch += 1;
     this.client = null;
@@ -347,7 +289,7 @@ class VoiceController {
     state.mode = "blind";
     if (state.screen === "mode") state.screen = "select";
     render();
-    await this.start("blind", orderContext(), { reuseMic: Boolean(pipeline) });
+    await this.start("blind", orderContext(), { retryPreReady: true });
     this.transitioning = false;
   }
 }
@@ -560,7 +502,7 @@ async function ensurePreferenceCamera() {
     return;
   }
   try {
-    state.stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" }, audio: false });
+    state.stream = await openPreferenceCameraStream();
     state.cameraStatus = "live";
     state.infer.status = "listening";
     bindCameraElement();
@@ -571,6 +513,18 @@ async function ensurePreferenceCamera() {
     state.infer.error = "Camera permission is required to add preferences.";
     updatePreferenceRegions();
   }
+}
+
+async function openPreferenceCameraStream() {
+  let lastError;
+  for (const constraints of CAMERA_CONSTRAINT_ATTEMPTS) {
+    try {
+      return await navigator.mediaDevices.getUserMedia(constraints);
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError;
 }
 
 function bindCameraElement() {
@@ -628,49 +582,58 @@ function captureClipFrame(requestScanId) {
 async function sendClipForInference(requestScanId) {
   const item = currentItem();
   if (!item || state.infer.scanId !== requestScanId || state.infer.accepted || state.infer.paused || state.infer.inFlight) return;
+  const inferState = state.infer;
   const clipSeq = state.infer.clipSeq;
-  const frames = state.infer.frames.slice();
+  const frames = state.infer.frames;
+  const body = JSON.stringify({
+    scan_id: requestScanId,
+    clip_seq: clipSeq,
+    item: { id: item.dish.id, quantity: item.qty },
+    frames
+  });
+  if (state.infer.frames === frames) state.infer.frames = [];
   state.infer.inFlight = true;
   state.infer.clipSeq += 1;
   state.infer.capturing = false;
+  const controller = new AbortController();
+  inferAbortController = controller;
   updateCameraDot();
   try {
     const response = await fetch(API_CONFIG.inferEndpoint, {
       method: "POST",
       credentials: "same-origin",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        scan_id: requestScanId,
-        clip_seq: clipSeq,
-        item: { id: item.dish.id, quantity: item.qty },
-        frames
-      })
+      signal: controller.signal,
+      body
     });
     if (!response.ok) throw new Error(`Preference request failed ${response.status}`);
     const data = await response.json();
-    if (data.scan_id !== requestScanId || state.infer.scanId !== requestScanId) return;
+    if (data.scan_id !== requestScanId || state.infer !== inferState || state.infer.scanId !== requestScanId) return;
     consumeInferenceResponse(data);
   } catch (error) {
-    if (state.infer.scanId !== requestScanId) return;
+    if (controller.signal.aborted || error.name === "AbortError") return;
+    if (state.infer !== inferState || state.infer.scanId !== requestScanId) return;
     stopInferenceLoop();
     state.infer.status = "unavailable";
     state.infer.error = "Preferences are unavailable. Please retry or continue without one.";
     updatePreferenceRegions();
   } finally {
-    if (state.infer.scanId === requestScanId) state.infer.inFlight = false;
-    if (state.infer.scanId === requestScanId && !state.infer.accepted && state.infer.status !== "unavailable") {
+    if (inferAbortController === controller) inferAbortController = null;
+    if (controller.signal.aborted || state.infer !== inferState || state.infer.scanId !== requestScanId) return;
+    state.infer.inFlight = false;
+    if (!state.infer.accepted && state.infer.status !== "unavailable") {
       state.inferTimer = window.setTimeout(() => beginCaptureWindow(requestScanId), state.infer.cooldownMs);
     }
   }
 }
 
 function captureFrame(video) {
-  const canvas = document.createElement("canvas");
-  canvas.width = 320;
-  canvas.height = Math.round((video.videoHeight / video.videoWidth) * canvas.width) || 240;
-  const context = canvas.getContext("2d");
-  context.drawImage(video, 0, 0, canvas.width, canvas.height);
-  return canvas.toDataURL("image/jpeg", 0.72);
+  if (!captureCanvas) captureCanvas = document.createElement("canvas");
+  if (!captureContext) captureContext = captureCanvas.getContext("2d");
+  captureCanvas.width = 320;
+  captureCanvas.height = Math.round((video.videoHeight / video.videoWidth) * captureCanvas.width) || 240;
+  captureContext.drawImage(video, 0, 0, captureCanvas.width, captureCanvas.height);
+  return captureCanvas.toDataURL("image/jpeg", 0.72);
 }
 
 function consumeInferenceResponse(data) {
@@ -687,6 +650,7 @@ function consumeInferenceResponse(data) {
     updateCameraDot();
   }
   if (state.infer.paused) stopInferenceLoop();
+  if (state.infer.paused) releaseInferenceSession();
   if (state.infer.accepted && state.infer.displayText) {
     const item = currentItem();
     addPreferenceNote(item, state.infer.displayText);
@@ -1075,9 +1039,37 @@ function bindCommon() {
 
 function stopCameraAndInference() {
   stopInferenceLoop();
+  abortActiveInferenceFetch();
+  releaseInferenceSession();
   if (state.stream) state.stream.getTracks().forEach(track => track.stop());
   state.stream = null;
   state.cameraStatus = "idle";
+}
+
+function abortActiveInferenceFetch() {
+  if (!inferAbortController) return;
+  try {
+    inferAbortController.abort();
+  } catch {
+    /* best effort only */
+  }
+}
+
+function releaseInferenceSession() {
+  if (!window.fetch) return;
+  const rawScanId = state.infer.scanId;
+  if (!rawScanId || releasedInferenceScanId === rawScanId) return;
+  releasedInferenceScanId = rawScanId;
+  const scanId = encodeURIComponent(rawScanId);
+  try {
+    fetch(`${API_CONFIG.inferEndpoint}/release?scan_id=${scanId}`, {
+      method: "POST",
+      credentials: "same-origin",
+      keepalive: true
+    }).catch(() => {});
+  } catch {
+    /* best effort only */
+  }
 }
 
 function resetOrder() {

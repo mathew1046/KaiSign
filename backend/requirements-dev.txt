@@ -1,0 +1,6 @@
+# Development/export/test dependencies. On Pi, use deploy/pi/install-runtime.sh
+# instead; Python 3.13 is unsupported for Pi MediaPipe.
+-r requirements-runtime.txt
+joblib==1.4.2
+scikit-learn==1.7.2
+pytest==8.3.4

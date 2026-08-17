@@ -5,17 +5,21 @@ from uuid import UUID
 from fastapi import WebSocket, WebSocketDisconnect, status
 
 from .config import gemini_model
-from .voice import LiveCart, LiveContext, VoiceMode, make_envelope, menu_context, system_prompt, tool_declarations, validate_payload
+from .esp_audio import esp_audio_source, read_esp_pcm_chunks
+from .voice import BLIND_OPENING_GREETING, LiveCart, LiveContext, VoiceMode, make_envelope, menu_context, system_prompt, tool_declarations, validate_payload
 
 MAX_AUDIO_BYTES = 96_000
 MAX_AUDIO_PER_10S = 80
 IDLE_SECONDS = 90
 MAX_SESSION_SECONDS = 900
 MAX_MESSAGE_CHARS = 140_000
-MAX_ACTIVE_SESSIONS = int(os.getenv("GEMINI_LIVE_MAX_SESSIONS", "4"))
 SESSION_COOKIE = "kiosk_session"
 _registry_lock = asyncio.Lock()
 _active_connections: dict[str, dict[str, object]] = {}
+
+
+def max_active_sessions() -> int:
+    return int(os.getenv("GEMINI_LIVE_MAX_SESSIONS", "4"))
 
 
 def _generic_error(code="live_error", message="Voice ordering is temporarily unavailable."):
@@ -38,7 +42,7 @@ async def reserve_live_connection(kiosk_key: str | None, client_session_id: str 
     if not kiosk_key:
         return None
     async with _registry_lock:
-        if kiosk_key in _active_connections or len(_active_connections) >= MAX_ACTIVE_SESSIONS:
+        if kiosk_key in _active_connections or len(_active_connections) >= max_active_sessions():
             return None
         token = secrets.token_urlsafe(16)
         _active_connections[kiosk_key] = {"token": token, "client_session_id": client_session_id, "started": time.monotonic()}
@@ -96,7 +100,7 @@ def _sdk_tools(types):
 async def maybe_send_blind_opening_turn(session, types, mode: VoiceMode):
     if mode != VoiceMode.blind:
         return False
-    prompt = "Begin the blind ordering session now with the required greeting question only."
+    prompt = f'Say exactly this opening greeting aloud and nothing else: "{BLIND_OPENING_GREETING}"'
     try:
         await session.send_client_content(turns=types.Content(role="user", parts=[types.Part(text=prompt)]), turn_complete=True)
     except AttributeError:
@@ -157,9 +161,31 @@ async def live_ws(websocket: WebSocket):
         async with client.aio.live.connect(model=gemini_model(), config=config) as session:
             await websocket.send_json({"type": "ready", "mode": mode.value})
             await maybe_send_blind_opening_turn(session, types, mode)
-            started = last = time.monotonic(); window_start = started; window_count = 0; stop = asyncio.Event()
+            started = last = time.monotonic(); stop = asyncio.Event(); input_ready = asyncio.Event(); send_lock = asyncio.Lock(); esp_token = await esp_audio_source.acquire()
+            if esp_token is None:
+                await websocket.send_json(_generic_error("input_unavailable", "Voice input is temporarily unavailable."))
+                return
+            async def esp_to_gemini():
+                nonlocal last
+                input_ready_sent = False
+                try:
+                    async for pcm in read_esp_pcm_chunks(stop, esp_audio_source, esp_token):
+                        input_ready.set()
+                        last = time.monotonic()
+                        async with send_lock:
+                            if stop.is_set() or not await esp_audio_source.owns(esp_token):
+                                break
+                            await session.send_realtime_input(audio=types.Blob(data=pcm, mime_type="audio/pcm;rate=16000"))
+                            if not input_ready_sent and await esp_audio_source.owns(esp_token) and not stop.is_set():
+                                await websocket.send_json({"type": "input_ready"})
+                                input_ready_sent = True
+                except Exception:
+                    try: await websocket.send_json(_generic_error("input_unavailable", "Voice input is temporarily unavailable."))
+                    except Exception: pass
+                    await esp_audio_source.release(esp_token)
+                    stop.set()
             async def browser_to_gemini():
-                nonlocal last, window_start, window_count
+                nonlocal last, owner_token
                 try:
                     while not stop.is_set():
                         now = time.monotonic()
@@ -173,21 +199,15 @@ async def live_ws(websocket: WebSocket):
                             continue
                         last = time.monotonic()
                         if msg.get("type") == "stop": break
-                        if msg.get("type") == "audio":
-                            if last - window_start > 10: window_start = last; window_count = 0
-                            window_count += 1
-                            if window_count > MAX_AUDIO_PER_10S: continue
-                            try:
-                                raw = base64.b64decode(msg.get("pcm16_base64", ""), validate=True)
-                            except Exception:
-                                continue
-                            if len(raw) > MAX_AUDIO_BYTES: continue
-                            await session.send_realtime_input(audio=types.Blob(data=raw, mime_type="audio/pcm;rate=16000"))
                 except WebSocketDisconnect:
                     pass
                 finally:
+                    await esp_audio_source.release(esp_token)
+                    await release_live_connection(kiosk_key, owner_token)
+                    owner_token = None
                     stop.set()
             async def gemini_to_browser():
+                nonlocal owner_token
                 while not stop.is_set():
                     saw_terminal = False
                     async for response in session.receive():
@@ -208,29 +228,47 @@ async def live_ws(websocket: WebSocket):
                                     action, payload = validate_payload(name, args, mode=mode, context=context)
                                     cart.apply(action, payload)
                                     envelope = make_envelope(session_id=session_id, mode=mode, action=action, payload=payload, cart=cart)
-                                    event = {"type": "wake_detected"} if action.value == "activate_blind_mode" else {"type": "state", "action": envelope.model_dump(mode="json")}
-                                    if not await owns_live_connection(kiosk_key, owner_token): stop.set(); break
-                                    await websocket.send_json(event)
                                     if is_terminal_wake_activation(mode, action.value):
+                                        await esp_audio_source.release(esp_token)
+                                        await release_live_connection(kiosk_key, owner_token)
+                                        owner_token = None
+                                        await websocket.send_json({"type": "wake_detected"})
                                         stop.set()
+                                    else:
+                                        event = {"type": "state", "action": envelope.model_dump(mode="json")}
+                                        if not await owns_live_connection(kiosk_key, owner_token): stop.set(); break
+                                        await websocket.send_json(event)
                                     guidance = None
                                     if action.value == "add_item":
                                         guidance = "Ask whether the user would like preferences for this item. Do not review yet."
                                     elif action.value in {"finish_customization", "continue_ordering"}:
                                         guidance = "Invite another item or ask if the user would like to review; do not call review_order unless explicitly requested."
                                     elif action.value == "select_category":
-                                        guidance = "Speak only the available items in this selected category."
+                                        guidance = "Speak only the available items in this selected category, including each canonical price from menu."
+                                    elif action.value == "review_order":
+                                        guidance = "Speak checkout_summary.spoken_summary verbatim and completely before asking for yes/no final confirmation."
                                     response_body = {"ok": True, "state": envelope.state.model_dump(mode="json"), "menu": menu_context(envelope.state.category), "guidance": guidance}
+                                    if action.value == "review_order":
+                                        response_body["checkout_summary"] = cart.checkout_summary()
                                     if action.value == "end_session": stop.set()
                                 except Exception:
                                     response_body = {"ok": False, "error": "invalid_tool_args"}
                                 replies.append(types.FunctionResponse(id=cid, name=name, response=response_body))
-                            await session.send_tool_response(function_responses=replies)
+                            async with send_lock:
+                                await session.send_tool_response(function_responses=replies)
                     if saw_terminal:
                         stop.set(); break
                     await asyncio.sleep(0.05)
-            tasks = [asyncio.create_task(browser_to_gemini()), asyncio.create_task(gemini_to_browser())]
+            tasks = [asyncio.create_task(esp_to_gemini()), asyncio.create_task(browser_to_gemini()), asyncio.create_task(gemini_to_browser())]
+            try:
+                await asyncio.wait_for(input_ready.wait(), timeout=5)
+            except asyncio.TimeoutError:
+                if not stop.is_set():
+                    await websocket.send_json(_generic_error("input_unavailable", "Voice input is temporarily unavailable."))
+                    await esp_audio_source.release(esp_token)
+                    stop.set()
             await stop.wait()
+            await esp_audio_source.release(esp_token)
             for task in tasks: task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
     except WebSocketDisconnect:

@@ -1,0 +1,12 @@
+# Raspberry Pi ARM64 Python 3.12 base runtime dependencies.
+# Install with binary wheels only before installing mediapipe --no-deps.
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+opencv-python-headless==4.10.0.84
+numpy==1.26.4
+httpx==0.28.1
+python-dotenv==1.0.1
+google-genai==1.56.0
+protobuf==4.25.8
+matplotlib==3.9.4
+attrs==26.1.0

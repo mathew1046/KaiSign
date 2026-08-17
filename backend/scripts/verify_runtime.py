@@ -2,13 +2,13 @@ from pathlib import Path
 import os, sys
 BACKEND = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BACKEND))
-from app.inference import TRAINING_WORDS, FEATURE_WIDTH
+from app.inference import TRAINING_WORDS, FEATURE_WIDTH, load_runtime_model
 ROOT = Path(__file__).resolve().parents[2]
-model = ROOT / os.getenv("KIOSK_MODEL_PATH", "training/runs/custom_10_words/models/knn_3.joblib")
+model = ROOT / os.getenv("KIOSK_MODEL_PATH", "backend/runtime_assets/logistic_sign_classifier.npz")
 task = ROOT / os.getenv("KIOSK_HAND_LANDMARKER_PATH", "../wlasl_signs_model/hand_landmarker.task")
 try:
-    import joblib, sklearn, mediapipe  # noqa
-    clf = joblib.load(model)
+    import mediapipe  # noqa
+    clf = load_runtime_model(model)
     assert hasattr(clf, "predict_proba")
     classes = list(getattr(clf, "classes_", []))
     assert len(classes) == len(TRAINING_WORDS) and set(map(int, classes)) == set(range(len(TRAINING_WORDS))), classes

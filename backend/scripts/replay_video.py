@@ -1,4 +1,4 @@
-"""Replay one captured video through the real MediaPipe/KNN pipeline without persisting media.
+"""Replay one captured video through the real MediaPipe/runtime model pipeline without persisting media.
 
 Usage: python scripts/replay_video.py [path/to/video.mp4]
 If omitted, the first repo dataset mp4 is used.
@@ -7,16 +7,16 @@ from pathlib import Path
 import os, sys
 BACKEND = Path(__file__).resolve().parents[1]; ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(BACKEND))
-from app.inference import TRAINING_WORDS, order_hands, normalize_frame, resample_sequence, FEATURE_WIDTH
+from app.inference import TRAINING_WORDS, order_hands, normalize_frame, resample_sequence, FEATURE_WIDTH, load_runtime_model
 
 def main():
     video = Path(sys.argv[1]) if len(sys.argv) > 1 else next((ROOT / "dataset").glob("*/*.mp4"), None)
     if not video or not video.exists(): raise FileNotFoundError("provide a captured video path")
-    model = ROOT / os.getenv("KIOSK_MODEL_PATH", "training/runs/custom_10_words/models/knn_3.joblib")
+    model = ROOT / os.getenv("KIOSK_MODEL_PATH", "backend/runtime_assets/logistic_sign_classifier.npz")
     task = ROOT / os.getenv("KIOSK_HAND_LANDMARKER_PATH", "../wlasl_signs_model/hand_landmarker.task")
-    import cv2, numpy as np, joblib, mediapipe as mp
+    import cv2, numpy as np, mediapipe as mp
     from mediapipe.tasks.python import BaseOptions, vision
-    clf = joblib.load(model)
+    clf = load_runtime_model(model)
     assert int(getattr(clf, "n_features_in_", FEATURE_WIDTH)) == FEATURE_WIDTH
     opts = vision.HandLandmarkerOptions(base_options=BaseOptions(model_asset_path=str(task)), running_mode=vision.RunningMode.VIDEO, num_hands=2, min_hand_detection_confidence=0.35, min_tracking_confidence=0.35)
     seq = []; ts = 0
