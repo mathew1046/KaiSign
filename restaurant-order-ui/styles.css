@@ -320,7 +320,9 @@ h3 { font-size: 28px; margin-bottom: 8px; }
 .camera-top { display: flex; justify-content: space-between; align-items: center; padding: 14px 18px; border-bottom: 3px solid var(--white); font-weight: 900; font-size: 20px; }
 .camera-window {
   position: relative;
-  min-height: 315px;
+  width: min(640px, 100%);
+  aspect-ratio: 1 / 1;
+  margin: 0 auto;
   display: grid;
   place-items: center;
   background:
@@ -328,7 +330,7 @@ h3 { font-size: 28px; margin-bottom: 8px; }
     linear-gradient(rgba(255,255,255,.06) 1px, transparent 1px) 0 0 / 38px 38px,
     #202020;
 }
-video { width: 100%; height: 315px; object-fit: cover; display: none; }
+video { width: 100%; height: 100%; aspect-ratio: 1 / 1; object-fit: cover; display: none; }
 video.live { display: block; }
 .camera-dot {
   position: absolute;
@@ -347,7 +349,7 @@ video.live { display: block; }
 .camera-placeholder span { display: block; font-size: 82px; }
 .service-panel { margin-top: 18px; }
 .voice-panel {
-  min-height: 315px;
+  min-height: min(640px, 80vw);
   display: grid;
   align-content: center;
   gap: 18px;

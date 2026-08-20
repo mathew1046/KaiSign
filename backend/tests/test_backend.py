@@ -318,6 +318,36 @@ def test_clip_frame_bounds_and_legacy_rejection_constants():
     from app.main import CLIP_MIN_FRAMES, CLIP_MAX_FRAMES
     assert (CLIP_MIN_FRAMES, CLIP_MAX_FRAMES) == (8, 12)
 
+def test_clip_byte_limits_cover_square_jpeg_base64_overhead():
+    from app.main import CLIP_DECODED_JPEG_BYTES_LIMIT, REQUEST_BODY_BYTES_LIMIT
+    assert CLIP_DECODED_JPEG_BYTES_LIMIT == 3_000_000
+    assert REQUEST_BODY_BYTES_LIMIT == 4_250_000
+    assert CLIP_DECODED_JPEG_BYTES_LIMIT < REQUEST_BODY_BYTES_LIMIT
+    assert int(CLIP_DECODED_JPEG_BYTES_LIMIT * 4 / 3) + 200_000 < REQUEST_BODY_BYTES_LIMIT
+
+def test_request_body_limit_rejects_oversized_payload():
+    from fastapi.testclient import TestClient
+    from app import main
+    with TestClient(main.app) as client:
+        r = client.post("/api/orders", content=b"x" * (main.REQUEST_BODY_BYTES_LIMIT + 1), headers={"content-type": "application/json"})
+    assert r.status_code == 413
+    assert r.json()["error"]["code"] == "request_too_large"
+
+def test_infer_decoded_jpeg_limit_rejects_oversized_clip_before_decode():
+    import base64
+    from uuid import uuid4
+    from fastapi.testclient import TestClient
+    from app import main
+    scan_id = str(uuid4())
+    main.engine.ready = True
+    too_large_frame = "data:image/jpeg;base64," + base64.b64encode(b"x" * (main.CLIP_DECODED_JPEG_BYTES_LIMIT + 1)).decode("ascii")
+    tiny_frame = "data:image/jpeg;base64,AA=="
+    payload = {"scan_id": scan_id, "clip_seq": 1, "item": {"id":"burger", "quantity":1}, "frames": [too_large_frame] + [tiny_frame] * (main.CLIP_MIN_FRAMES - 1)}
+    with TestClient(main.app) as client:
+        r = client.post("/api/infer", json=payload)
+    assert r.status_code == 413
+    assert r.json()["error"]["code"] == "clip_too_large"
+
 def test_one_clip_request_counter_model():
     from app.inference import InferenceEngine
     e = InferenceEngine(__import__("pathlib").Path("."), "missing", "missing", .60, 5, 2)

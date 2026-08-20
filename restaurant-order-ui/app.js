@@ -33,16 +33,17 @@ const PLAYBACK_QUEUE_SECONDS_LIMIT = 30;
 const CAMERA_CONSTRAINTS = {
   video: {
     facingMode: { ideal: "user" },
-    width: { ideal: 320, max: 320 },
-    height: { ideal: 240, max: 240 },
+    width: { ideal: 640, max: 640 },
+    height: { ideal: 640, max: 640 },
+    aspectRatio: { ideal: 1 },
     frameRate: { ideal: 8, max: 8 }
   },
   audio: false
 };
 const CAMERA_CONSTRAINT_ATTEMPTS = [
   CAMERA_CONSTRAINTS,
-  { video: { facingMode: { ideal: "user" }, width: { max: 320 }, height: { max: 240 }, frameRate: { max: 8 } }, audio: false },
-  { video: { width: { max: 320 }, height: { max: 240 }, frameRate: { max: 8 } }, audio: false }
+  { video: { facingMode: { ideal: "user" }, width: { ideal: 640, max: 640 }, height: { ideal: 640, max: 640 }, aspectRatio: { ideal: 1 }, frameRate: { max: 8 } }, audio: false },
+  { video: { width: { ideal: 640, max: 640 }, height: { ideal: 640, max: 640 }, aspectRatio: { ideal: 1 }, frameRate: { max: 8 } }, audio: false }
 ];
 
 const state = {
@@ -759,9 +760,15 @@ async function sendClipForInference(requestScanId) {
 function captureFrame(video) {
   if (!captureCanvas) captureCanvas = document.createElement("canvas");
   if (!captureContext) captureContext = captureCanvas.getContext("2d");
-  captureCanvas.width = 320;
-  captureCanvas.height = Math.round((video.videoHeight / video.videoWidth) * captureCanvas.width) || 240;
-  captureContext.drawImage(video, 0, 0, captureCanvas.width, captureCanvas.height);
+  const size = 640;
+  const sourceWidth = video.videoWidth || size;
+  const sourceHeight = video.videoHeight || size;
+  const sourceSize = Math.min(sourceWidth, sourceHeight);
+  const sourceX = Math.max(0, (sourceWidth - sourceSize) / 2);
+  const sourceY = Math.max(0, (sourceHeight - sourceSize) / 2);
+  captureCanvas.width = size;
+  captureCanvas.height = size;
+  captureContext.drawImage(video, sourceX, sourceY, sourceSize, sourceSize, 0, 0, size, size);
   return captureCanvas.toDataURL("image/jpeg", 0.72);
 }
 

@@ -89,6 +89,8 @@ Voice ownership is serialized through one lifecycle controller. At any moment th
 
 The browser collects JPEG frames locally every 200 ms for one continuous 2-second window, then sends exactly one clip request. No network requests are made for individual frames.
 
+Deaf-mode gesture capture requests a square 640×640 camera feed at 8 fps. The preview is rendered as a responsive square, and inference frames are center-cropped to 640×640 to match the visible preview without stretching.
+
 Request JSON:
 
 ```json

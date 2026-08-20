@@ -10,7 +10,9 @@ from .live import live_ws
 from .inference import InferenceEngine, resample_sequence, aggregate_label, DISPLAY_WORD, confidence_passes
 
 load_settings()
-MAX_BODY = 1_500_000
+CLIP_DECODED_JPEG_BYTES_LIMIT = 3_000_000
+REQUEST_BODY_BYTES_LIMIT = 4_250_000
+MAX_BODY = REQUEST_BODY_BYTES_LIMIT
 SESSION_COOKIE = "kiosk_session"
 
 def env(name, default): return os.getenv(name, default)
@@ -83,7 +85,7 @@ async def infer(request: Request):
         total_decoded = 0
         for frame in frames:
             raw = base64.b64decode(frame.split(",",1)[1], validate=True); total_decoded += len(raw)
-            if total_decoded > 1_000_000: return error("clip_too_large", "clip too large", 413)
+            if total_decoded > CLIP_DECODED_JPEG_BYTES_LIMIT: return error("clip_too_large", "clip too large", 413)
             arr = np.frombuffer(raw, dtype=np.uint8); bgr = cv2.imdecode(arr, cv2.IMREAD_COLOR)
             if bgr is None: return error("bad_frame", "invalid JPEG", 415)
             rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
