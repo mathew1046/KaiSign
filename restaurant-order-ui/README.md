@@ -2,7 +2,24 @@
 
 Dependency-free frontend assets for the restaurant kiosk. The real integrated experience must be served by the backend so the same-origin API and WebSocket routes below are available; running these files with `python -m http.server` is only useful for static asset checks and will not provide live voice, gesture preferences, or order persistence.
 
-The first screen shows only two choices: **Normal** and **Deaf**. Deaf keeps the existing camera/configured sign-classifier preference path. Normal uses touch menu selection, then a Live voice preference flow for the selected item. Blind mode is not shown on the first screen; it starts only after `/ws/live` sends `wake_detected` for “Hey Kaizen”.
+The first screen shows only two choices: **Normal** and **Deaf**. Deaf keeps the existing camera/configured sign-classifier preference path. Normal uses keypad menu selection, then a Live voice preference flow for the selected item. Blind mode is not shown on the first screen; it starts only after `/ws/live` sends `wake_detected` for “Hey Kaizen”.
+
+## Keypad-only kiosk interaction
+
+Normal and Deaf users operate the frontend with the physical numeric keypad only. The app listens only to `KeyboardEvent.code` values `Numpad0` through `Numpad9`; top-row number keys are not substitutes. Mouse, click, touch, context-menu, and wheel input are suppressed globally.
+
+The same directional mapping is used throughout:
+
+- `Numpad8`: move up
+- `Numpad2`: move down
+- `Numpad4`: move left
+- `Numpad6`: move right
+- `Numpad5`: select the focused control
+- `Numpad0`: back / cancel
+
+The focused control is visually highlighted and scrolled into view during numpad navigation. Disabled controls are skipped. If there is no control farther up or down, the up/down keys scroll the page. This reaches mode selection, categories, menu item add/remove quantity controls, preferences, Deaf camera retry, checkout actions, reset, and new-order success.
+
+Normal mode still receives server-side voice preference updates. Deaf mode still runs the existing camera/sign-classifier preference capture.
 
 ## Normalized API contract
 
@@ -30,7 +47,7 @@ Normal and Blind sessions include context when useful:
 }
 ```
 
-The browser does not capture or send voice microphone audio. Voice input is relayed server-side from `ESP_AUDIO_STREAM_URL` (default `http://172.16.162.9/stream`), a server-only ESP32 WAV stream; the browser WebSocket carries only `start`/`stop`, state, wake/blind transition, and Gemini output playback.
+The browser does not capture or send voice microphone audio. Voice input is relayed server-side from the ESP UDP raw PCM source configured by `ESP_AUDIO_UDP_HOST` and `ESP_AUDIO_UDP_PORT` (defaults `0.0.0.0:12345`). The stream is 16 kHz mono signed PCM16 in 512-byte datagrams; the browser WebSocket carries only `start`/`stop`, state, wake/blind transition, and Gemini output playback.
 
 Handled server events:
 

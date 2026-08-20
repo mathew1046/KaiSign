@@ -75,6 +75,10 @@ const state = {
     error: "",
     orderId: "",
     idempotencyKey: createId()
+  },
+  keypad: {
+    focusId: "mode-normal",
+    announcement: "Use the numpad arrows to move and 5 to select."
   }
 };
 
@@ -286,6 +290,7 @@ class VoiceController {
     this.client = null;
     this.kind = "none";
     wakeClient = null;
+    resetKeypadSelection();
     state.mode = "blind";
     if (state.screen === "mode") state.screen = "select";
     render();
@@ -318,6 +323,103 @@ function currentItem() {
   return state.items[state.preferenceIndex];
 }
 
+function setAnnouncement(message) {
+  state.keypad.announcement = message;
+  const region = document.querySelector("#keypadLiveRegion");
+  if (region) region.textContent = message;
+}
+
+function keypadLegend() {
+  return `<div class="keypad-legend" aria-hidden="true"><span>8 ↑</span><span>4 ←</span><strong>5 Select</strong><span>6 →</span><span>2 ↓</span><span>0 Back</span></div><div id="keypadLiveRegion" class="sr-only" aria-live="polite" aria-atomic="true">${escapeHtml(state.keypad.announcement)}</div>`;
+}
+
+function visibleSelectMenu() {
+  return state.category === "All" ? menu : menu.filter(item => item.category === state.category);
+}
+
+function resetKeypadSelection() {
+  state.keypad.focusId = "mode-normal";
+}
+
+function focusClass(id) {
+  return state.keypad.focusId === id ? "key-focus" : "";
+}
+
+function focusAttrs(id) {
+  return `${focusClass(id)}" data-focus-id="${id}" ${state.keypad.focusId === id ? 'aria-current="true"' : ""}`;
+}
+
+function selectFocusables() {
+  const visibleMenu = visibleSelectMenu();
+  const entries = categories().map(category => ({ id: `cat-${category}`, label: category, action: () => selectCategory(category) }));
+  visibleMenu.forEach(dish => {
+    const qty = state.items.find(item => item.dish.id === dish.id)?.qty || 0;
+    if (qty > 0) entries.push({ id: `remove-${dish.id}`, label: `Remove ${dish.name}`, action: () => removeFocusedDish(dish) });
+    entries.push({ id: `add-${dish.id}`, label: `Add ${dish.name}`, action: () => addFocusedDish(dish) });
+  });
+  if (state.items.length) entries.push({ id: "select-next", label: "Preferences", action: startPreferencesFlow });
+  return entries;
+}
+
+function preferenceFocusables() {
+  const deafMode = state.mode === "deaf";
+  return [
+    { id: "pref-prev", label: "Previous item", action: previousPreferenceItem },
+    { id: "pref-next", label: "Next item", action: nextItemOrCheckout },
+    { id: "pref-checkout", label: "Checkout", action: goCheckout },
+    ...(deafMode ? [{ id: "pref-retry", label: "Retry camera", action: retryInference }] : []),
+    { id: "pref-back", label: "Menu", action: backToSelect }
+  ];
+}
+
+function checkoutFocusables() {
+  if (state.order.status === "sending") return [];
+  return [
+    { id: "checkout-send", label: "Send order", action: submitOrder },
+    { id: "checkout-edit", label: "Edit preferences", action: editPreferencesFromCheckout },
+    { id: "checkout-reset", label: "Reset order", action: resetOrder }
+  ];
+}
+
+function currentFocusables() {
+  if (state.screen === "mode") return [
+    { id: "mode-normal", label: "Normal", action: () => startMode("normal") },
+    { id: "mode-deaf", label: "Deaf", action: () => startMode("deaf") }
+  ];
+  if (state.screen === "select") return selectFocusables();
+  if (state.screen === "preferences") return preferenceFocusables();
+  if (state.screen === "checkout") return checkoutFocusables();
+  if (state.screen === "success") return [{ id: "success-new", label: "New order", action: resetOrder }];
+  return [];
+}
+
+function ensureFocus() {
+  const focusables = currentFocusables();
+  if (!focusables.some(entry => entry.id === state.keypad.focusId)) state.keypad.focusId = focusables[0]?.id || "";
+}
+
+function focusedEntry() {
+  ensureFocus();
+  return currentFocusables().find(entry => entry.id === state.keypad.focusId);
+}
+
+function scrollFocusedIntoView() {
+  requestAnimationFrame(() => {
+    document.querySelector(`[data-focus-id="${CSS.escape(state.keypad.focusId)}"]`)?.scrollIntoView({ block: "center", inline: "nearest", behavior: "smooth" });
+  });
+}
+
+function availableFocusableEntries() {
+  return currentFocusables().map(entry => {
+    const element = document.querySelector(`[data-focus-id="${CSS.escape(entry.id)}"]`);
+    return element && !element.disabled && element.getClientRects().length ? { ...entry, element, rect: element.getBoundingClientRect() } : null;
+  }).filter(Boolean);
+}
+
+function rectCenter(rect) {
+  return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+}
+
 function categories() {
   return ["All", ...new Set(menu.map(item => item.category))];
 }
@@ -336,27 +438,28 @@ function topLine(active) {
 }
 
 function render() {
-  if (state.screen === "mode") return renderModeChoice();
-  if (state.screen === "success") return renderSuccess();
-  if (state.screen === "preferences") return renderPreferences();
-  if (state.screen === "checkout") return renderCheckout();
-  renderSelect();
+  if (state.screen === "mode") renderModeChoice();
+  else if (state.screen === "success") renderSuccess();
+  else if (state.screen === "preferences") renderPreferences();
+  else if (state.screen === "checkout") renderCheckout();
+  else renderSelect();
+  scrollFocusedIntoView();
 }
 
 function renderModeChoice() {
   stopCameraAndInference();
+  ensureFocus();
   app.innerHTML = `<section class="mode-screen">
+    ${keypadLegend()}
     <div class="mode-card">
-      <button class="mode-choice normal" data-mode="normal">Normal</button>
-      <button class="mode-choice deaf" data-mode="deaf">Deaf</button>
+      <button class="mode-choice normal ${focusAttrs("mode-normal")}>Normal</button>
+      <button class="mode-choice deaf ${focusAttrs("mode-deaf")}>Deaf</button>
     </div>
   </section>`;
-  document.querySelectorAll("[data-mode]").forEach(button => {
-    button.addEventListener("click", () => startMode(button.dataset.mode));
-  });
 }
 
 function startMode(mode) {
+  resetKeypadSelection();
   state.mode = mode;
   state.screen = "select";
   stopLiveSession();
@@ -366,47 +469,44 @@ function startMode(mode) {
 
 function renderSelect() {
   if (state.mode !== "deaf") stopCameraAndInference();
-  const visibleMenu = state.category === "All" ? menu : menu.filter(item => item.category === state.category);
+  const visibleMenu = visibleSelectMenu();
+  ensureFocus();
   app.innerHTML = `<section class="shell ${state.mode === "blind" ? "voice-driven" : ""}">
     ${topLine("Select")}
+    ${keypadLegend()}
     <div class="hero">
       <div>
         <div class="eyebrow">Menu</div>
         <h1>Choose your order.</h1>
         <p class="lead">Build your cart, then add preferences.</p>
       </div>
-      <div class="notice">${itemCount()} item${itemCount() === 1 ? "" : "s"} · ${money(subtotal())}</div>
     </div>
     <div class="category-row" aria-label="Menu categories">
-      ${categories().map(category => `<button class="category-btn ${state.category === category ? "active" : ""}" data-category="${category}">${category}</button>`).join("")}
+      ${categories().map(category => `<button class="category-btn ${state.category === category ? "active" : ""} ${focusAttrs(`cat-${category}`)} data-category="${category}">${category}</button>`).join("")}
     </div>
     <div class="dish-grid">
-      ${visibleMenu.map(dishCard).join("")}
+      ${visibleMenu.map((dish, index) => dishCard(dish, index)).join("")}
     </div>
     <div class="cart-bar">
       <div class="cart-total">🧾 ${itemCount()} item${itemCount() === 1 ? "" : "s"} · ${money(subtotal())}</div>
-      <button class="btn primary" data-action="start-preferences" ${state.items.length ? "" : "disabled"}>Next → Preferences</button>
+      <button class="btn primary ${focusAttrs("select-next")} data-action="start-preferences" ${state.items.length ? "" : "disabled"}>Next → Preferences</button>
     </div>
   </section>${toastMarkup()}`;
-  bindCommon();
-  if (state.mode === "blind") return;
-  document.querySelectorAll("[data-category]").forEach(button => button.addEventListener("click", () => { state.category = button.dataset.category; render(); }));
-  document.querySelectorAll("[data-add]").forEach(button => button.addEventListener("click", () => addDish(button.dataset.add)));
-  document.querySelectorAll("[data-remove]").forEach(button => button.addEventListener("click", () => removeDish(button.dataset.remove)));
 }
 
-function dishCard(dish) {
+function dishCard(dish, index = 0) {
   const selected = state.items.find(item => item.dish.id === dish.id);
   const qty = selected?.qty || 0;
-  return `<article class="dish-card ${qty ? "selected" : ""}">
+  const focused = state.keypad.focusId === `add-${dish.id}` || state.keypad.focusId === `remove-${dish.id}`;
+  return `<article class="dish-card ${qty ? "selected" : ""} ${focused ? "focused" : ""}">
     <span class="food-icon">${dish.icon}</span>
     <span class="dish-name">${dish.name}</span>
     <p class="dish-description">${dish.description}</p>
     <span class="dish-meta"><span>${dish.category}</span><span>${money(dish.basePrice)}</span></span>
     <div class="qty-row" aria-label="Quantity for ${dish.name}">
-      <button class="qty-btn" data-remove="${dish.id}" ${qty ? "" : "disabled"}>−</button>
+      <button class="qty-btn ${focusAttrs(`remove-${dish.id}`)} data-remove="${dish.id}" ${qty ? "" : "disabled"}>−</button>
       <span class="qty-count">${qty}</span>
-      <button class="qty-btn" data-add="${dish.id}">+</button>
+      <button class="qty-btn ${focusAttrs(`add-${dish.id}`)} data-add="${dish.id}">+</button>
     </div>
   </article>`;
 }
@@ -423,6 +523,33 @@ function addDish(id, silent = false) {
   if (!silent) { showToast("Quantity updated"); render(); }
 }
 
+function selectCategory(category) {
+  state.category = category;
+  state.keypad.focusId = `cat-${category}`;
+  render();
+  scrollFocusedIntoView();
+  setAnnouncement(`${category} selected.`);
+}
+
+function addFocusedDish(dish) {
+  addDish(dish.id, true);
+  state.keypad.focusId = `add-${dish.id}`;
+  render();
+  scrollFocusedIntoView();
+  setAnnouncement(`${dish.name} added.`);
+}
+
+function removeFocusedDish(dish) {
+  const existing = state.items.find(item => item.dish.id === dish.id);
+  if (!existing) return setAnnouncement(`${dish.name} is not in your cart.`);
+  removeDish(dish.id, true);
+  const remaining = state.items.find(item => item.dish.id === dish.id)?.qty || 0;
+  state.keypad.focusId = remaining > 0 ? `remove-${dish.id}` : `add-${dish.id}`;
+  render();
+  scrollFocusedIntoView();
+  setAnnouncement(`${dish.name} removed.`);
+}
+
 function removeDish(id, silent = false) {
   const existingIndex = state.items.findIndex(item => item.dish.id === id);
   if (existingIndex < 0) return;
@@ -436,8 +563,10 @@ function renderPreferences() {
   const item = currentItem();
   if (!item) { state.preferenceIndex = 0; return render(); }
   const deafMode = state.mode === "deaf";
+  ensureFocus();
   app.innerHTML = `<section class="shell ${state.mode === "blind" ? "voice-driven" : ""}">
     ${topLine("Preferences")}
+    ${keypadLegend()}
     <div class="custom-layout">
       <div class="panel">
         <div class="dish-header"><span class="food-icon">${item.dish.icon}</span><div><div class="progress-line">Item ${state.preferenceIndex + 1} of ${state.items.length}</div><h2>${item.dish.name}</h2></div></div>
@@ -459,16 +588,16 @@ function renderPreferences() {
         <div class="panel service-panel">
           <div id="serviceMessage" class="boundary ${state.infer.status === "unavailable" ? "error" : "quiet"}">${escapeHtml(serviceMessage())}</div>
           <div class="action-row">
-            <button class="btn primary" data-action="next-item">Next item</button>
-            <button class="btn green" data-action="checkout">Checkout</button>
-            ${deafMode ? `<button class="btn" data-action="retry-inference">Retry camera</button>` : ""}
-            <button class="btn" data-action="back-select">← Menu</button>
+            <button class="btn ${focusAttrs("pref-prev")} data-action="previous-item">Previous item</button>
+            <button class="btn primary ${focusAttrs("pref-next")} data-action="next-item">Next item</button>
+            <button class="btn green ${focusAttrs("pref-checkout")} data-action="checkout">Checkout</button>
+            ${deafMode ? `<button class="btn ${focusAttrs("pref-retry")} data-action="retry-inference">Retry camera</button>` : ""}
+            <button class="btn ${focusAttrs("pref-back")} data-action="back-select">← Menu</button>
           </div>
         </div>
       </div>
     </div>
   </section>${toastMarkup()}`;
-  bindCommon();
   if (state.mode === "blind") return;
   if (deafMode) {
     bindCameraElement();
@@ -712,6 +841,7 @@ async function startNormalPreferenceSession() {
 async function activateBlindMode(sourceClient) {
   if (sourceClient) return voice.activateBlindFromWake(sourceClient);
   stopCameraAndInference();
+  resetKeypadSelection();
   state.mode = "blind";
   if (state.screen === "mode") state.screen = "select";
   render();
@@ -857,6 +987,7 @@ function mapScreen(value) {
 function endVoiceSession() {
   playback.clear();
   stopLiveSession();
+  resetKeypadSelection();
   state.mode = "choice";
   state.screen = "mode";
   render();
@@ -924,16 +1055,159 @@ function nextItemOrCheckout() {
   } else {
     stopCameraAndInference();
     state.screen = "checkout";
+    state.keypad.focusId = "checkout-send";
     render();
   }
 }
+
+function previousPreferenceItem() {
+  if (!state.items.length) return;
+  if (state.mode === "normal") stopLiveSession();
+  resetInferenceState();
+  state.preferenceIndex = Math.max(0, state.preferenceIndex - 1);
+  render();
+  if (state.mode === "normal") startNormalPreferenceSession();
+}
+
+function startPreferencesFlow() {
+  if (!state.items.length) return setAnnouncement("Add at least one item before preferences.");
+  state.screen = "preferences";
+  state.keypad.focusId = "pref-next";
+  state.preferenceIndex = 0;
+  resetInferenceState();
+  render();
+  if (state.mode === "normal") startNormalPreferenceSession();
+}
+
+function backToSelect() {
+  if (state.mode === "normal") stopLiveSession();
+  stopCameraAndInference();
+  state.screen = "select";
+  state.keypad.focusId = "select-next";
+  render();
+}
+
+function goCheckout() {
+  if (state.mode === "normal") stopLiveSession();
+  stopCameraAndInference();
+  state.screen = "checkout";
+  state.keypad.focusId = "checkout-send";
+  render();
+}
+
+function retryInference() {
+  resetInferenceState();
+  state.cameraStatus = state.stream ? "live" : "idle";
+  updatePreferenceRegions();
+  ensurePreferenceCamera();
+}
+
+function editPreferencesFromCheckout() {
+  if (state.order.status === "sending") return setAnnouncement("Order is sending. Please wait.");
+  state.order = { status: "idle", error: "", orderId: "", idempotencyKey: createId() };
+  state.screen = "preferences";
+  state.keypad.focusId = "pref-next";
+  state.preferenceIndex = 0;
+  resetInferenceState();
+  render();
+  if (state.mode === "normal") startNormalPreferenceSession();
+}
+
+function keypadScroll(direction) {
+  window.scrollBy({ top: direction * Math.round(window.innerHeight * 0.65), behavior: "smooth" });
+  setAnnouncement(direction > 0 ? "Scrolled down." : "Scrolled up.");
+}
+
+function moveFocus(direction) {
+  let focusables = availableFocusableEntries();
+  if (!focusables.length) return direction === "up" ? keypadScroll(-1) : direction === "down" ? keypadScroll(1) : setAnnouncement("No available control.");
+  if (!focusables.some(entry => entry.id === state.keypad.focusId)) {
+    state.keypad.focusId = focusables[0].id;
+    render();
+    return setAnnouncement(`${focusables[0].label} focused.`);
+  }
+  const current = focusables.find(entry => entry.id === state.keypad.focusId);
+  if (!current || !focusables.length) return;
+  const currentCenter = rectCenter(current.rect);
+  const candidates = focusables.filter(entry => {
+    if (entry.id === current.id) return false;
+    const center = rectCenter(entry.rect);
+    if (direction === "up") return center.y < currentCenter.y - 4;
+    if (direction === "down") return center.y > currentCenter.y + 4;
+    if (direction === "left") return center.x < currentCenter.x - 4;
+    if (direction === "right") return center.x > currentCenter.x + 4;
+    return false;
+  });
+  if (!candidates.length) {
+    if (direction === "up") return keypadScroll(-1);
+    if (direction === "down") return keypadScroll(1);
+    return setAnnouncement("No control in that direction.");
+  }
+  candidates.sort((a, b) => {
+    const centerA = rectCenter(a.rect);
+    const centerB = rectCenter(b.rect);
+    const primaryA = direction === "left" || direction === "right" ? Math.abs(centerA.x - currentCenter.x) : Math.abs(centerA.y - currentCenter.y);
+    const primaryB = direction === "left" || direction === "right" ? Math.abs(centerB.x - currentCenter.x) : Math.abs(centerB.y - currentCenter.y);
+    const secondaryA = direction === "left" || direction === "right" ? Math.abs(centerA.y - currentCenter.y) : Math.abs(centerA.x - currentCenter.x);
+    const secondaryB = direction === "left" || direction === "right" ? Math.abs(centerB.y - currentCenter.y) : Math.abs(centerB.x - currentCenter.x);
+    return primaryA - primaryB || secondaryA - secondaryB;
+  });
+  state.keypad.focusId = candidates[0].id;
+  render();
+  scrollFocusedIntoView();
+  setAnnouncement(`${candidates[0].label} focused.`);
+}
+
+function activateFocused() {
+  const entry = availableFocusableEntries().find(candidate => candidate.id === state.keypad.focusId);
+  if (!entry) return setAnnouncement("That control is unavailable.");
+  entry.action();
+}
+
+function goBack() {
+  if (state.screen === "mode") return setAnnouncement("Choose Normal or Deaf.");
+  if (state.screen === "select") return resetOrder();
+  if (state.screen === "preferences") return backToSelect();
+  if (state.screen === "checkout") return editPreferencesFromCheckout();
+  if (state.screen === "success") return resetOrder();
+}
+
+function handleKeypadKey(event) {
+  const match = /^Numpad([0-9])$/.exec(event.code || "");
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  if (!match) {
+    if (event.type === "keydown") setAnnouncement("Only the physical numeric keypad works on this kiosk.");
+    return;
+  }
+  const number = Number(match[1]);
+  if (number === 8) return moveFocus("up");
+  if (number === 2) return moveFocus("down");
+  if (number === 4) return moveFocus("left");
+  if (number === 6) return moveFocus("right");
+  if (number === 5) return activateFocused();
+  if (number === 0) return goBack();
+  setAnnouncement("Use 8 up, 2 down, 4 left, 6 right, 5 select, or 0 back.");
+}
+
+function suppressPointerInput(event) {
+  event.preventDefault();
+  event.stopImmediatePropagation();
+}
+
+["pointerdown", "pointerup", "pointermove", "mousedown", "mouseup", "mousemove", "click", "dblclick", "touchstart", "touchmove", "touchend", "contextmenu", "wheel"].forEach(type => {
+  document.addEventListener(type, suppressPointerInput, { capture: true, passive: false });
+});
+document.addEventListener("keydown", handleKeypadKey, { capture: true });
 
 function renderCheckout() {
   stopCameraAndInference();
   const tax = subtotal() * 0.0825;
   const grand = subtotal() + tax;
+  ensureFocus();
   app.innerHTML = `<section class="shell ${state.mode === "blind" ? "voice-driven" : ""}">
     ${topLine("Checkout")}
+    ${keypadLegend()}
     <div class="hero">
       <div><div class="eyebrow">Step 3 · review</div><h1>Review your order.</h1><p class="lead">Confirm the items and preferences below before sending to the counter.</p></div>
     </div>
@@ -945,14 +1219,13 @@ function renderCheckout() {
         <div class="total-line grand"><span>Total</span><strong>${money(grand)}</strong></div>
         ${orderStatusMarkup()}
         <div class="action-row">
-          <button class="btn green" data-action="send" ${state.order.status === "sending" ? "disabled" : ""}>${state.order.status === "sending" ? "Sending…" : "Send Order"}</button>
-          <button class="btn" data-action="back-preferences" ${state.order.status === "sending" ? "disabled" : ""}>← Edit preferences</button>
-          <button class="btn red" data-action="reset" ${state.order.status === "sending" ? "disabled" : ""}>Reset</button>
+          <button class="btn green ${focusAttrs("checkout-send")} data-action="send" ${state.order.status === "sending" ? "disabled" : ""}>${state.order.status === "sending" ? "Sending…" : "Send Order"}</button>
+          <button class="btn ${focusAttrs("checkout-edit")} data-action="back-preferences" ${state.order.status === "sending" ? "disabled" : ""}>← Edit preferences</button>
+          <button class="btn red ${focusAttrs("checkout-reset")} data-action="reset" ${state.order.status === "sending" ? "disabled" : ""}>Reset</button>
         </div>
       </div>
     </div>
   </section>${toastMarkup()}`;
-  bindCommon();
 }
 
 function summaryCard(item, index) {
@@ -1012,29 +1285,14 @@ function orderPayload() {
 }
 
 function renderSuccess() {
+  ensureFocus();
   app.innerHTML = `<section class="success"><div class="success-card">
+    ${keypadLegend()}
     <div class="success-icon">✅</div>
     <h1>Order received.</h1>
     <p class="lead">Confirmation ${escapeHtml(state.order.orderId)}. Thank you.</p>
-    <button class="btn primary" data-action="reset">New Order</button>
+    <button class="btn primary ${focusAttrs("success-new")} data-action="reset">New Order</button>
   </div></section>`;
-  bindCommon();
-}
-
-function bindCommon() {
-  document.querySelectorAll("[data-action]").forEach(button => {
-    button.addEventListener("click", () => {
-      const action = button.dataset.action;
-      if (action === "start-preferences") { state.screen = "preferences"; state.preferenceIndex = 0; resetInferenceState(); render(); if (state.mode === "normal") startNormalPreferenceSession(); }
-      if (action === "next-item") nextItemOrCheckout();
-      if (action === "retry-inference") { resetInferenceState(); state.cameraStatus = state.stream ? "live" : "idle"; updatePreferenceRegions(); ensurePreferenceCamera(); }
-      if (action === "back-select") { if (state.mode === "normal") stopLiveSession(); stopCameraAndInference(); state.screen = "select"; render(); }
-      if (action === "checkout") { if (state.mode === "normal") stopLiveSession(); stopCameraAndInference(); state.screen = "checkout"; render(); }
-      if (action === "back-preferences") { state.order = { status: "idle", error: "", orderId: "", idempotencyKey: createId() }; state.screen = "preferences"; state.preferenceIndex = 0; resetInferenceState(); render(); if (state.mode === "normal") startNormalPreferenceSession(); }
-      if (action === "send") submitOrder();
-      if (action === "reset") resetOrder();
-    });
-  });
 }
 
 function stopCameraAndInference() {
@@ -1073,11 +1331,13 @@ function releaseInferenceSession() {
 }
 
 function resetOrder() {
+  if (state.order.status === "sending") return setAnnouncement("Order is sending. Please wait.");
   stopWakeListener();
   stopLiveSession();
   stopCameraAndInference();
   state.mode = "choice";
   state.screen = "mode";
+  resetKeypadSelection();
   state.category = "All";
   state.items = [];
   state.preferenceIndex = 0;

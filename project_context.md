@@ -6,15 +6,17 @@
 > by a camera, then checks out.
 >
 > **Core UX principle:** *Deaf diners order in their own language.* The sign shows the
-> menu visually; customization is done by signing, not by hunting through touch menus.
+> menu visually; operation is physical numeric keypad-only, and customization is done
+> by signing rather than mouse, click, touch, or wheel input.
 
 ---
 
 ## 1. Product Overview
 
 ### 1.1 What it does
-- A **touchscreen sign** (plus camera) placed in a restaurant.
-- Customer **browses and selects dish(es)** by tapping.
+- A **restaurant kiosk sign** with physical numeric keypad input plus camera.
+- Customer **browses and selects dish(es)** with `Numpad0`–`Numpad9`; mouse, click,
+  touch, and wheel interaction are disabled.
 - For each selected dish, they enter a **customization screen** where they express
   edits by **making ASL hand signs** in front of the camera.
 - The system recognizes the sign, applies the modification, and the customer confirms.
@@ -51,16 +53,16 @@ signs. The two-part grammar is: **target + action**.
  │ 1. DISH     │ ──► │ 2. CUSTOMIZATION     │ ──► │ 3. CHECKOUT   │
  │ SELECTION   │     │ (per selected dish)  │     │ (order review)│
  └────────────┘     └─────────────────────┘     └───────────────┘
-   tap dishes        sign to customize           review & confirm
+   keypad select     sign to customize           keypad confirm
    (multi-select)    next">Confirm & Send to Kitchen
 ```
 
 ### Screen 1 — Dish Selection
 - Grid of food items with photos + names + prices.
-- User taps to select; selected items get a highlighted border + count badge.
+- User selects with the physical numeric keypad; selected items get a highlighted border + count badge.
 - User can select **multiple** dishes.
 - A persistent cart/order bar shows running total and a **"Next →"** / cart button.
-- Tapping an already-selected dish de-selects it (or opens its customizations).
+- Selecting an already-selected dish with the keypad de-selects it or opens its customizations.
 
 ### Screen 2 — Customization (per dish)
 - Header: which dish this customization belongs to (photo + name).
@@ -160,8 +162,8 @@ OrderSession (runtime)
 
 1. **Design system** — colors, type scale, icon set, reusable buttons/cards.
 2. **Screen 1 — Dish grid + cart bar** (static menu data first).
-3. **Screen 2 — Customization flow** (start with mock/tap-based "signs" so the flow works
-   without the camera; then wire live recognition).
+3. **Screen 2 — Customization flow** (start with mock keypad-driven "signs" so the flow
+   works without the camera; then wire live recognition).
 4. **Screen 3 — Checkout & order review**.
 5. **Live camera integration** — swap mock signs for real ASL recognition, add
    confidence gating + debounce + confirm step.

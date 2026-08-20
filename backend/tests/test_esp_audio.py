@@ -1,85 +1,123 @@
+import asyncio
+import socket
+
 import pytest
 
-from app.esp_audio import ESPAudioSource, esp_audio_stream_url, parse_wav_header, pcm_chunks_from_wav_stream
+from app.esp_audio import (
+    DEFAULT_ESP_AUDIO_UDP_HOST,
+    DEFAULT_ESP_AUDIO_UDP_PORT,
+    ESP_AUDIO_PACKET_BYTES,
+    ESPAudioError,
+    ESPAudioSource,
+    _is_valid_pcm_datagram,
+    esp_audio_bind_config,
+    read_esp_pcm_chunks,
+)
 
 
-def wav_header(fmt_extra=b"", prefix_chunks=b""):
-    fmt_size = 16 + len(fmt_extra)
-    fmt = b"fmt " + fmt_size.to_bytes(4, "little") + b"\x01\x00\x01\x00\x80>\x00\x00\x00}\x00\x00\x02\x00\x10\x00" + fmt_extra
-    data = b"data" + (0xFFFFFFFF).to_bytes(4, "little")
-    return b"RIFF" + (0xFFFFFFFF).to_bytes(4, "little") + b"WAVE" + prefix_chunks + fmt + data
+@pytest.fixture(autouse=True)
+def use_ephemeral_udp_port(monkeypatch):
+    monkeypatch.setenv("ESP_AUDIO_UDP_HOST", "127.0.0.1")
+    monkeypatch.setenv("ESP_AUDIO_UDP_PORT", "0")
 
 
-def test_parse_standard_streaming_wav_header():
-    header = wav_header()
-
-    data_start, data_size = parse_wav_header(header)
-
-    assert data_start == len(header)
-    assert data_size == 0xFFFFFFFF
+@pytest.fixture
+def anyio_backend():
+    return "asyncio"
 
 
-def test_parse_extended_and_arbitrary_chunks():
-    junk = b"JUNK" + (3).to_bytes(4, "little") + b"abc" + b"\x00"
-    header = wav_header(fmt_extra=b"\x00\x00", prefix_chunks=junk)
+def test_esp_audio_udp_config_defaults(monkeypatch):
+    monkeypatch.delenv("ESP_AUDIO_UDP_HOST", raising=False)
+    monkeypatch.delenv("ESP_AUDIO_UDP_PORT", raising=False)
 
-    data_start, _ = parse_wav_header(header[:10] + header[10:])
-
-    assert data_start == len(header)
+    assert esp_audio_bind_config() == (DEFAULT_ESP_AUDIO_UDP_HOST, DEFAULT_ESP_AUDIO_UDP_PORT)
 
 
-def test_parse_rejects_unsupported_format():
-    bad = bytearray(wav_header())
-    bad[20:22] = b"\x03\x00"
+def test_esp_audio_udp_config_overrides_and_validation(monkeypatch):
+    monkeypatch.setenv("ESP_AUDIO_UDP_HOST", "127.0.0.1")
+    monkeypatch.setenv("ESP_AUDIO_UDP_PORT", "23456")
+    assert esp_audio_bind_config() == ("127.0.0.1", 23456)
 
-    with pytest.raises(ValueError):
-        parse_wav_header(bytes(bad))
+    monkeypatch.setenv("ESP_AUDIO_UDP_HOST", " ")
+    with pytest.raises(ESPAudioError):
+        esp_audio_bind_config()
 
+    monkeypatch.setenv("ESP_AUDIO_UDP_HOST", "127.0.0.1")
+    monkeypatch.setenv("ESP_AUDIO_UDP_PORT", "65536")
+    with pytest.raises(ESPAudioError):
+        esp_audio_bind_config()
 
-def test_parse_rejects_bad_block_align_and_byte_rate():
-    bad_align = bytearray(wav_header())
-    bad_align[32:34] = b"\x04\x00"
-    with pytest.raises(ValueError):
-        parse_wav_header(bytes(bad_align))
-    bad_rate = bytearray(wav_header())
-    bad_rate[28:32] = (44100).to_bytes(4, "little")
-    with pytest.raises(ValueError):
-        parse_wav_header(bytes(bad_rate))
-
-
-def test_parse_rejects_malformed_header():
-    with pytest.raises(ValueError):
-        parse_wav_header(b"not a wav header")
+    monkeypatch.setenv("ESP_AUDIO_UDP_PORT", "not-a-port")
+    with pytest.raises(ESPAudioError):
+        esp_audio_bind_config()
 
 
-@pytest.mark.asyncio
-async def test_pcm_chunks_from_arbitrary_boundaries():
-    payload = b"\x01\x02" * 2000
-    chunks = [wav_header()[:5], wav_header()[5:] + payload[:17], payload[17:3300], payload[3300:]]
-
-    async def source():
-        for chunk in chunks:
-            yield chunk
-
-    out = [chunk async for chunk in pcm_chunks_from_wav_stream(source())]
-
-    assert b"".join(out) == payload
-    assert all(len(chunk) <= 3200 for chunk in out)
+def test_pcm_datagram_acceptance_rejection():
+    assert _is_valid_pcm_datagram(b"\x00" * ESP_AUDIO_PACKET_BYTES)
+    assert not _is_valid_pcm_datagram(b"\x00" * (ESP_AUDIO_PACKET_BYTES - 1))
+    assert not _is_valid_pcm_datagram(b"\x00" * (ESP_AUDIO_PACKET_BYTES + 1))
 
 
-@pytest.mark.asyncio
-async def test_pcm_chunks_discard_odd_trailing_byte():
-    payload = b"\x01\x02\x03"
+@pytest.mark.anyio
+async def test_read_chunks_yields_only_valid_pcm_datagrams():
+    source = ESPAudioSource()
+    lease = await source.acquire()
+    assert lease is not None
+    await source._publish(b"bad")
+    good = b"\x12\x34" * (ESP_AUDIO_PACKET_BYTES // 2)
+    await source._publish(good)
 
-    async def source():
-        yield wav_header() + payload
+    stop = asyncio.Event()
+    chunk = await asyncio.wait_for(read_esp_pcm_chunks(stop, source, lease).__anext__(), timeout=1)
 
-    out = [chunk async for chunk in pcm_chunks_from_wav_stream(source())]
+    assert chunk == good
+    await source.release(lease)
 
-    assert b"".join(out) == b"\x01\x02"
+
+@pytest.mark.anyio
+async def test_latest_packet_wins_when_internal_queue_has_backlog():
+    source = ESPAudioSource()
+    lease = await source.acquire()
+    assert lease is not None
+    queue = lease[2]
+
+    first = b"\x01" * ESP_AUDIO_PACKET_BYTES
+    second = b"\x02" * ESP_AUDIO_PACKET_BYTES
+    await source._publish(first)
+    await source._publish(second)
+
+    assert queue.qsize() == 1
+    assert await queue.get() == second
+    await source.release(lease)
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
+async def test_latest_packet_wins_when_socket_has_backlog(monkeypatch):
+    recv_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    recv_sock.bind(("127.0.0.1", 0))
+    recv_sock.setblocking(False)
+    host, port = recv_sock.getsockname()
+    monkeypatch.setattr(ESPAudioSource, "_open_socket", lambda self: recv_sock)
+
+    sender = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    source = ESPAudioSource()
+    lease = await source.acquire()
+    assert lease is not None
+    try:
+        sender.sendto(b"x", (host, port))
+        sender.sendto(b"\x01" * ESP_AUDIO_PACKET_BYTES, (host, port))
+        sender.sendto(b"\x02" * ESP_AUDIO_PACKET_BYTES, (host, port))
+
+        chunk = await asyncio.wait_for(lease[2].get(), timeout=1)
+        assert chunk == b"\x02" * ESP_AUDIO_PACKET_BYTES
+        await asyncio.sleep(0)
+        assert lease[2].empty()
+    finally:
+        sender.close()
+        await source.release(lease)
+
+
+@pytest.mark.anyio
 async def test_esp_audio_source_lease_is_exclusive_and_token_safe():
     source = ESPAudioSource()
     first = await source.acquire()
@@ -95,7 +133,7 @@ async def test_esp_audio_source_lease_is_exclusive_and_token_safe():
     await source.release(second)
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_source_generation_invalidates_stale_lease():
     source = ESPAudioSource()
     first = await source.acquire()
@@ -106,29 +144,3 @@ async def test_source_generation_invalidates_stale_lease():
     assert not await source.owns(first)
     assert await source.owns(second)
     await source.release(second)
-
-
-@pytest.mark.asyncio
-async def test_source_queue_drops_oldest_when_bounded():
-    source = ESPAudioSource()
-    lease = await source.acquire()
-    assert lease is not None
-    queue = lease[2]
-
-    for index in range(10):
-        await source._publish(bytes([index]))
-
-    assert queue.qsize() == 8
-    assert await queue.get() == b"\x02"
-    await source.release(lease)
-
-
-def test_esp_audio_stream_url_validation(monkeypatch):
-    monkeypatch.setenv("ESP_AUDIO_STREAM_URL", "http://example.test/stream")
-    assert esp_audio_stream_url() == "http://example.test/stream"
-    monkeypatch.setenv("ESP_AUDIO_STREAM_URL", "http://user@example.test/stream")
-    with pytest.raises(ValueError):
-        esp_audio_stream_url()
-    monkeypatch.setenv("ESP_AUDIO_STREAM_URL", "http://example.test/stream?x=1")
-    with pytest.raises(ValueError):
-        esp_audio_stream_url()

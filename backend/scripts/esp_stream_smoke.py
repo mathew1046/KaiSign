@@ -1,35 +1,37 @@
 import asyncio
+import socket
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import httpx
-
-from app.esp_audio import esp_audio_stream_url, parse_wav_header
+from app.esp_audio import ESP_AUDIO_PACKET_BYTES, esp_audio_bind_config
 
 
 async def main():
+    host, port = esp_audio_bind_config()
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.setblocking(False)
     try:
-        url = esp_audio_stream_url()
-        timeout = httpx.Timeout(connect=3.0, read=5.0, write=3.0, pool=3.0)
-        async with httpx.AsyncClient(timeout=timeout, follow_redirects=False, trust_env=False) as client:
-            async with client.stream("GET", url) as response:
-                response.raise_for_status()
-                header = b""
-                async for chunk in response.aiter_bytes():
-                    header += chunk
-                    data_start, _ = parse_wav_header(header)
-                    if data_start is not None:
-                        print("ESP stream smoke: success (PCM mono 16000 Hz 16-bit WAV)")
-                        return 0
-                    if len(header) > 4096:
-                        raise ValueError("header too large")
-        print("ESP stream smoke: failed (no WAV data)")
+        sock.bind((host, port))
+    except OSError as exc:
+        print(f"ESP UDP smoke: failed to bind {host}:{port} ({exc})")
         return 1
-    except Exception:
-        print("ESP stream smoke: failed (stream unavailable or unsupported format)")
+
+    loop = asyncio.get_running_loop()
+    print(f"ESP UDP smoke: listening on {host}:{port} for one {ESP_AUDIO_PACKET_BYTES}-byte PCM datagram")
+    try:
+        while True:
+            packet, addr = await asyncio.wait_for(loop.sock_recvfrom(sock, ESP_AUDIO_PACKET_BYTES + 1), timeout=10)
+            if len(packet) == ESP_AUDIO_PACKET_BYTES:
+                print(f"ESP UDP smoke: success (16 kHz mono signed 16-bit little-endian PCM from {addr[0]}:{addr[1]})")
+                return 0
+            print(f"ESP UDP smoke: ignored malformed datagram ({len(packet)} bytes)")
+    except TimeoutError:
+        print("ESP UDP smoke: failed (no valid UDP PCM datagram within 10s)")
         return 1
+    finally:
+        sock.close()
 
 
 if __name__ == "__main__":

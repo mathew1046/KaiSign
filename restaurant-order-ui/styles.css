@@ -12,7 +12,7 @@
   --radius: 28px;
 }
 
-* { box-sizing: border-box; }
+* { box-sizing: border-box; cursor: none !important; }
 
 body {
   margin: 0;
@@ -25,6 +25,7 @@ body {
 }
 
 button, input { font: inherit; }
+button, input, .category-btn, .dish-card, .btn { pointer-events: none; }
 
 #app { min-height: 100vh; padding: clamp(18px, 3vw, 42px); }
 
@@ -32,6 +33,7 @@ button, input { font: inherit; }
   min-height: calc(100vh - clamp(36px, 6vw, 84px));
   display: grid;
   place-items: center;
+  gap: 24px;
 }
 
 .mode-card {
@@ -42,6 +44,7 @@ button, input { font: inherit; }
 }
 
 .mode-choice {
+  position: relative;
   min-height: clamp(260px, 46vh, 460px);
   border: 5px solid var(--ink);
   border-radius: 38px;
@@ -57,6 +60,31 @@ button, input { font: inherit; }
 .mode-choice:hover, .mode-choice:focus-visible { transform: translate(-4px, -4px); box-shadow: 24px 24px 0 var(--ink); }
 .mode-choice.normal { background: var(--gold); }
 .mode-choice.deaf { background: var(--white); }
+.keypad-legend {
+  width: fit-content;
+  max-width: 100%;
+  margin: 0 auto 20px;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 15px;
+  font-weight: 900;
+}
+.keypad-legend span, .keypad-legend strong {
+  border: 2px solid rgba(16,16,16,.24);
+  border-radius: 999px;
+  background: rgba(255,255,255,.58);
+  padding: 6px 10px;
+}
+.keypad-legend strong { color: var(--ink); background: rgba(255, 197, 61, .42); }
+.key-focus {
+  outline: 6px solid var(--blue) !important;
+  outline-offset: 5px;
+  transform: translate(-3px, -3px);
+  box-shadow: 14px 14px 0 var(--blue) !important;
+}
 
 .shell { max-width: 1280px; margin: 0 auto; }
 
@@ -113,16 +141,6 @@ h2 { font-size: clamp(36px, 5vw, 72px); line-height: .92; letter-spacing: -.06em
 h3 { font-size: 28px; margin-bottom: 8px; }
 .lead { font-size: clamp(21px, 2.4vw, 32px); line-height: 1.16; color: #2d2923; }
 
-.notice {
-  border: 4px solid var(--ink);
-  border-radius: var(--radius);
-  background: var(--ink);
-  color: var(--white);
-  padding: 24px;
-  font-size: 24px;
-  box-shadow: 12px 12px 0 var(--gold);
-}
-
 .category-row {
   display: flex;
   flex-wrap: wrap;
@@ -165,6 +183,8 @@ h3 { font-size: 28px; margin-bottom: 8px; }
 }
 .dish-card:hover, .dish-card:focus-visible { transform: translate(-3px, -3px); box-shadow: 15px 15px 0 var(--ink); }
 .dish-card.selected { background: var(--gold); outline: 6px solid var(--blue); }
+.dish-card.focused { background: #fff3c7; }
+.dish-card.focused.selected { background: var(--gold); }
 .food-icon { font-size: 72px; display: block; margin-bottom: 12px; }
 .dish-name { font-size: 34px; font-weight: 900; letter-spacing: -.04em; display: block; }
 .dish-description { min-height: 48px; margin: 10px 0 0; color: var(--muted); font-size: 19px; font-weight: 700; line-height: 1.2; }
@@ -188,6 +208,7 @@ h3 { font-size: 28px; margin-bottom: 8px; }
   margin-top: 18px;
 }
 .qty-btn {
+  position: relative;
   width: 64px;
   height: 64px;
   border: 4px solid var(--ink);

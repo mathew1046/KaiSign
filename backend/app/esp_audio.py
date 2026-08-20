@@ -1,14 +1,12 @@
 import asyncio
 import os
+import socket
 from collections.abc import AsyncIterator
-from urllib.parse import urlparse
 
-import httpx
-
-DEFAULT_ESP_AUDIO_STREAM_URL = "http://172.16.162.9/stream"
-MAX_WAV_HEADER_BYTES = 4096
-PCM_CHUNK_BYTES = 3200
-QUEUE_MAX_CHUNKS = 8
+DEFAULT_ESP_AUDIO_UDP_HOST = "0.0.0.0"
+DEFAULT_ESP_AUDIO_UDP_PORT = 12345
+ESP_AUDIO_PACKET_BYTES = 512
+QUEUE_MAX_CHUNKS = 1
 
 
 class ESPAudioError(ValueError):
@@ -17,72 +15,22 @@ class ESPAudioError(ValueError):
         self.retryable = retryable
 
 
-def esp_audio_stream_url() -> str:
-    url = os.getenv("ESP_AUDIO_STREAM_URL", DEFAULT_ESP_AUDIO_STREAM_URL).strip()
-    parsed = urlparse(url)
-    if parsed.scheme not in {"http", "https"} or not parsed.netloc or parsed.username or parsed.password or parsed.params or parsed.query or parsed.fragment:
-        raise ESPAudioError("invalid ESP audio stream URL")
-    return url
+def esp_audio_bind_config() -> tuple[str, int]:
+    host = os.getenv("ESP_AUDIO_UDP_HOST", DEFAULT_ESP_AUDIO_UDP_HOST).strip()
+    port_text = os.getenv("ESP_AUDIO_UDP_PORT", str(DEFAULT_ESP_AUDIO_UDP_PORT)).strip()
+    if not host:
+        raise ESPAudioError("invalid ESP audio UDP host")
+    try:
+        port = int(port_text, 10)
+    except ValueError as exc:
+        raise ESPAudioError("invalid ESP audio UDP port") from exc
+    if not 0 <= port <= 65535:
+        raise ESPAudioError("invalid ESP audio UDP port")
+    return host, port
 
 
-def parse_wav_header(buffer: bytes) -> tuple[int | None, int]:
-    if len(buffer) < 12:
-        return None, 0
-    if buffer[:4] != b"RIFF" or buffer[8:12] != b"WAVE":
-        raise ESPAudioError("unsupported wav header")
-    pos = 12
-    fmt_ok = False
-    while pos + 8 <= len(buffer):
-        chunk_id = buffer[pos:pos + 4]
-        size = int.from_bytes(buffer[pos + 4:pos + 8], "little")
-        start = pos + 8
-        end = start + size
-        padded_end = end + (size % 2)
-        if chunk_id == b"data":
-            if not fmt_ok:
-                raise ESPAudioError("wav data before fmt")
-            return start, size
-        if end > len(buffer):
-            if len(buffer) > MAX_WAV_HEADER_BYTES:
-                raise ESPAudioError("wav header too large")
-            return None, 0
-        if chunk_id == b"fmt ":
-            if size < 16:
-                raise ESPAudioError("invalid wav fmt chunk")
-            audio_format = int.from_bytes(buffer[start:start + 2], "little")
-            channels = int.from_bytes(buffer[start + 2:start + 4], "little")
-            rate = int.from_bytes(buffer[start + 4:start + 8], "little")
-            byte_rate = int.from_bytes(buffer[start + 8:start + 12], "little")
-            block_align = int.from_bytes(buffer[start + 12:start + 14], "little")
-            bits = int.from_bytes(buffer[start + 14:start + 16], "little")
-            if audio_format != 1 or channels != 1 or rate != 16000 or byte_rate != 32000 or block_align != 2 or bits != 16:
-                raise ESPAudioError("unsupported wav format")
-            fmt_ok = True
-        pos = padded_end
-    if len(buffer) > MAX_WAV_HEADER_BYTES:
-        raise ESPAudioError("wav header too large")
-    return None, 0
-
-
-async def pcm_chunks_from_wav_stream(byte_chunks: AsyncIterator[bytes]) -> AsyncIterator[bytes]:
-    pending = b""
-    data_start = None
-    async for chunk in byte_chunks:
-        if not chunk:
-            continue
-        pending += chunk
-        if data_start is None:
-            data_start, _ = parse_wav_header(pending)
-            if data_start is None:
-                continue
-            pending = pending[data_start:]
-        while len(pending) >= PCM_CHUNK_BYTES:
-            yield pending[:PCM_CHUNK_BYTES]
-            pending = pending[PCM_CHUNK_BYTES:]
-    if data_start is not None and len(pending) > 1:
-        if len(pending) % 2:
-            pending = pending[:-1]
-        yield pending
+def _is_valid_pcm_datagram(packet: bytes) -> bool:
+    return len(packet) == ESP_AUDIO_PACKET_BYTES
 
 
 class ESPAudioSource:
@@ -107,11 +55,20 @@ class ESPAudioSource:
 
     async def release(self, lease):
         token = lease[0] if isinstance(lease, tuple) else lease
+        task: asyncio.Task | None = None
         async with self._lock:
             if self._sink_token is token:
                 self._sink_token = None
                 self._queue = None
                 self._generation += 1
+                task = self._reader_task
+                self._reader_task = None
+        if task is not None:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
 
     async def owns(self, lease) -> bool:
         if isinstance(lease, tuple):
@@ -126,46 +83,68 @@ class ESPAudioSource:
             queue = self._queue
         if queue is None:
             return
-        if queue.full():
+        while queue.full():
             try:
                 queue.get_nowait()
             except asyncio.QueueEmpty:
-                pass
+                break
         try:
             queue.put_nowait(item)
         except asyncio.QueueFull:
             pass
 
+    async def _wait_readable(self, sock: socket.socket):
+        loop = asyncio.get_running_loop()
+        future = loop.create_future()
+
+        def ready():
+            if not future.done():
+                future.set_result(None)
+
+        loop.add_reader(sock.fileno(), ready)
+        try:
+            await future
+        finally:
+            loop.remove_reader(sock.fileno())
+
+    def _open_socket(self) -> socket.socket:
+        host, port = esp_audio_bind_config()
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            sock.setblocking(False)
+            sock.bind((host, port))
+        except Exception:
+            sock.close()
+            raise
+        return sock
+
     async def _reader_loop(self):
-        backoff = 0.25
-        while True:
-            async with self._lock:
-                has_sink = self._sink_token is not None
-            if not has_sink:
-                await asyncio.sleep(0.05)
-                continue
-            try:
-                url = esp_audio_stream_url()
-                timeout = httpx.Timeout(connect=3.0, read=8.0, write=3.0, pool=3.0)
-                async with httpx.AsyncClient(timeout=timeout, follow_redirects=False, trust_env=False) as client:
-                    async with client.stream("GET", url) as response:
-                        response.raise_for_status()
-                        saw_pcm = False
-                        async for pcm in pcm_chunks_from_wav_stream(response.aiter_bytes()):
-                            saw_pcm = True
-                            backoff = 0.25
-                            await self._publish(pcm)
-                        if not saw_pcm:
-                            raise ESPAudioError("esp stream ended before audio", retryable=True)
-            except ESPAudioError as exc:
-                if not exc.retryable:
-                    await self._publish(exc)
-                    await asyncio.sleep(1.0)
-                    continue
-            except (httpx.HTTPError, OSError):
-                pass
-            await asyncio.sleep(backoff)
-            backoff = min(backoff * 2, 5.0)
+        sock: socket.socket | None = None
+        try:
+            sock = self._open_socket()
+            while True:
+                async with self._lock:
+                    has_sink = self._sink_token is not None
+                if not has_sink:
+                    return
+                await self._wait_readable(sock)
+                newest: bytes | None = None
+                while True:
+                    try:
+                        packet, _ = sock.recvfrom(ESP_AUDIO_PACKET_BYTES + 1)
+                    except BlockingIOError:
+                        break
+                    if _is_valid_pcm_datagram(packet):
+                        newest = packet
+                if newest is not None:
+                    await self._publish(newest)
+        except asyncio.CancelledError:
+            raise
+        except (OSError, ESPAudioError) as exc:
+            await self._publish(ESPAudioError(str(exc), retryable=isinstance(exc, OSError)))
+        finally:
+            if sock is not None:
+                sock.close()
 
 
 async def read_esp_pcm_chunks(stop: asyncio.Event, source: ESPAudioSource, lease) -> AsyncIterator[bytes]:
@@ -174,9 +153,7 @@ async def read_esp_pcm_chunks(stop: asyncio.Event, source: ESPAudioSource, lease
         item = await queue.get()
         if isinstance(item, ESPAudioError):
             raise item
-        if len(item) % 2:
-            item = item[:-1]
-        if item:
+        if _is_valid_pcm_datagram(item):
             yield item
 
 

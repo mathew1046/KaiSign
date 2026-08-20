@@ -4,7 +4,7 @@
 
 This project is a restaurant ordering kiosk that supports several ways for a customer to place and customise an order:
 
-- touch and live voice interaction;
+- physical numeric keypad and live voice interaction;
 - camera-based recognition of a small set of American Sign Language (ASL) words; and
 - a voice-led accessibility flow for blind users.
 
@@ -154,6 +154,8 @@ Training outputs are stored under `training/runs/custom_10_words/`. Important ou
 
 The user-facing part of the project is a restaurant ordering kiosk. It is a lightweight static interface built with HTML, CSS, and plain JavaScript, then served by the FastAPI backend from the same origin. It does not use a large frontend framework.
 
+Current kiosk operation is physical numeric keypad-only. Normal and Deaf users use `Numpad0` through `Numpad9` for mode choice, menu selection and navigation, scrolling, quantities, preferences, checkout, and order actions. Mouse, click, touch, and wheel interaction are disabled.
+
 ### User Journey
 
 The normal order flow is:
@@ -178,7 +180,7 @@ The interface keeps the menu, cart, preferences, checkout state, and final succe
 
 #### Normal Mode
 
-Normal mode is shown on the first screen. The customer uses the touch menu to choose food, then uses a live voice flow to set preferences for the selected item. The browser WebSocket carries session control, state, and Gemini audio output; the backend owns the configured ESP32 WAV stream and forwards validated PCM to Gemini Live.
+Normal mode is shown on the first screen. The customer uses the physical numeric keypad to choose food, navigate, set quantities, and take order actions, then uses a live voice flow to set preferences for the selected item. The browser WebSocket carries session control, state, and Gemini audio output; the backend owns the configured ESP32 UDP microphone source and forwards validated PCM to Gemini Live.
 
 Examples of normal-mode preferences include adding or removing ingredients after an item has been selected.
 
@@ -199,7 +201,7 @@ The clip is processed as one short signing window. Video can remain visible afte
 Blind mode is intentionally not a first-screen button. It starts after the wake phrase **“Hey Kaizen”** is detected. It is a voice-led ordering experience:
 
 - the browser WebSocket carries `start`/`stop`, state, wake/blind transition, and Gemini output playback;
-- the backend reads `ESP_AUDIO_STREAM_URL` (default `http://172.16.162.9/stream`) as a server-only ESP32 WAV stream and forwards validated 16 kHz mono PCM16 to Gemini Live;
+- the backend binds the server-only ESP32 UDP microphone source using `ESP_AUDIO_UDP_HOST` and `ESP_AUDIO_UDP_PORT` (defaults `0.0.0.0:12345`), accepts raw 16 kHz mono signed PCM16 in 512-byte datagrams, drops stale packets in favour of the newest packet, and forwards validated PCM to Gemini Live;
 - the backend sends the conversation to Gemini Live and validates its requested actions against the kiosk menu;
 - spoken audio replies are played in the browser; and
 - the customer can browse categories, add items, customise an item, review the order, and explicitly confirm it by voice.
@@ -260,9 +262,9 @@ Customer selects Normal mode or triggers Blind mode
         ↓
 Browser opens one controlled WebSocket session
         ↓
-Backend reads the configured ESP32 WAV stream
+Backend receives the configured ESP32 UDP microphone source
         ↓
-Backend validates PCM and relays it to Gemini Live
+Backend validates raw 512-byte PCM16 datagrams, keeps the newest packet, and relays it to Gemini Live
         ↓
 Gemini requests a structured order action
         ↓
