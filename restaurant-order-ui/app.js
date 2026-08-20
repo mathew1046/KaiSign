@@ -564,21 +564,23 @@ function renderPreferences() {
   const item = currentItem();
   if (!item) { state.preferenceIndex = 0; return render(); }
   const deafMode = state.mode === "deaf";
+  const blindMode = state.mode === "blind";
   ensureFocus();
-  app.innerHTML = `<section class="shell ${state.mode === "blind" ? "voice-driven" : ""}">
+  app.innerHTML = `<section class="shell ${blindMode ? "voice-driven" : ""}">
     ${topLine("Preferences")}
     ${keypadLegend()}
-    <div class="custom-layout">
+    <div class="custom-layout ${blindMode ? "compact-preferences" : ""}">
       <div class="panel">
         <div class="dish-header"><span class="food-icon">${item.dish.icon}</span><div><div class="progress-line">Item ${state.preferenceIndex + 1} of ${state.items.length}</div><h2>${item.dish.name}</h2></div></div>
-        ${state.mode === "blind" ? "" : `<p class="lead">${deafMode ? "Add a preference with a gesture, or continue." : "Say a preference, or continue."}</p>`}
+        ${blindMode ? "" : `<p class="lead">${deafMode ? "Add a preference with a gesture, or continue." : "Say a preference, or continue."}</p>`}
         <div class="preference-result ${state.infer.accepted || item.preferences.length ? "accepted" : ""}">
           <span class="result-kicker">Preference</span>
           <strong id="preferenceResultText">${escapeHtml(displayPreferenceText(item))}</strong>
         </div>
         <div id="preferenceListRegion">${preferenceList(item)}</div>
+        ${blindMode ? preferenceActionPanel(deafMode) : ""}
       </div>
-      <div>
+      ${blindMode ? "" : `<div>
         ${deafMode ? `<div class="camera-card">
           <div class="camera-window">
             <video id="camera" autoplay playsinline muted></video>
@@ -586,24 +588,28 @@ function renderPreferences() {
             <div class="camera-placeholder" id="cameraPlaceholder"><span>📷</span></div>
           </div>
         </div>` : `<div class="panel voice-panel"><div class="voice-orb" aria-hidden="true"></div><h3>${escapeHtml(item.dish.name)}</h3><div class="chip-row">${item.preferences.map(pref => `<span class="chip confirmed">${escapeHtml(pref.displayText)}</span>`).join("")}</div></div>`}
-        <div class="panel service-panel">
-          <div id="serviceMessage" class="boundary ${state.infer.status === "unavailable" ? "error" : "quiet"}">${escapeHtml(serviceMessage())}</div>
-          <div class="action-row">
-            <button class="btn ${focusAttrs("pref-prev")} data-action="previous-item">Previous item</button>
-            <button class="btn primary ${focusAttrs("pref-next")} data-action="next-item">Next item</button>
-            <button class="btn green ${focusAttrs("pref-checkout")} data-action="checkout">Checkout</button>
-            ${deafMode ? `<button class="btn ${focusAttrs("pref-retry")} data-action="retry-inference">Retry camera</button>` : ""}
-            <button class="btn ${focusAttrs("pref-back")} data-action="back-select">← Menu</button>
-          </div>
-        </div>
-      </div>
+        ${preferenceActionPanel(deafMode)}
+      </div>`}
     </div>
   </section>${toastMarkup()}`;
-  if (state.mode === "blind") return;
+  if (blindMode) return;
   if (deafMode) {
     bindCameraElement();
     ensurePreferenceCamera();
   }
+}
+
+function preferenceActionPanel(deafMode) {
+  return `<div class="panel service-panel">
+    <div id="serviceMessage" class="boundary ${state.infer.status === "unavailable" ? "error" : "quiet"}">${escapeHtml(serviceMessage())}</div>
+    <div class="action-row">
+      <button class="btn ${focusAttrs("pref-prev")} data-action="previous-item">Previous item</button>
+      <button class="btn primary ${focusAttrs("pref-next")} data-action="next-item">Next item</button>
+      <button class="btn green ${focusAttrs("pref-checkout")} data-action="checkout">Checkout</button>
+      ${deafMode ? `<button class="btn ${focusAttrs("pref-retry")} data-action="retry-inference">Retry camera</button>` : ""}
+      <button class="btn ${focusAttrs("pref-back")} data-action="back-select">← Menu</button>
+    </div>
+  </div>`;
 }
 
 function latestPreference(item) {

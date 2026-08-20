@@ -271,6 +271,7 @@ h3 { font-size: 28px; margin-bottom: 8px; }
 .btn:disabled { opacity: .45; cursor: not-allowed; transform: none; }
 
 .custom-layout { display: grid; grid-template-columns: .92fr 1.08fr; gap: 24px; align-items: start; }
+.custom-layout.compact-preferences { grid-template-columns: minmax(0, 840px); justify-content: center; }
 .panel { padding: 24px; }
 .dish-header { display: flex; align-items: center; gap: 18px; margin-bottom: 16px; }
 .dish-header .food-icon { margin: 0; }
